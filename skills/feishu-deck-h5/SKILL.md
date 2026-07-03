@@ -5,8 +5,11 @@ description: |
   汇报材料, 客户提案, h5 deck, 16:9 网页演示, HTML deck generation/editing/validation,
   source parsing, Magic Page/Miaobi/html-box publishing, and feishu-slide-library
   importing. Routes work to subskills; generation is DeckJSON/render-deck first,
-  normally raw-first, with validation before handoff or publish. For real `.pptx`,
-  use a PowerPoint/keynote workflow instead.
+  normally raw-first, with validation before handoff or publish. Can also export a
+  PPTX via the self-contained pptx-exporter subskill (svg_to_pptx + svg_finalize
+  vendored in — no ppt-master needed): snapshot (faithful image-per-slide, not
+  editable) or native/hybrid (`deck-to-svg --pptx` — schema pages → editable vector,
+  raw pages → snapshot).
 ---
 
 # feishu-deck-h5
@@ -51,6 +54,16 @@ Routing guard for slide-library import requests:
 - Importer means quality gate first, then PR into
   `FuQiang/feishu-slide-library`, then sync the Cloudflare-hosted library
   viewer. It is distinct from Magic Page publishing.
+
+Routing guard for PPTX export requests:
+
+- If the user wants a .pptx of a confirmed deck (导出 PPT / 转 pptx / export to
+  pptx / 可编辑 PPT), lock `Mode=pptx-export` and dispatch to
+  `subskills/pptx-exporter/SKILL.md`. Two self-contained modes: snapshot (default
+  — `html-to-pptx.py`, faithful image-per-slide, not editable) and native/hybrid
+  (`deck-to-svg.py --pptx` — schema pages → editable vector via vendored
+  svg_to_pptx, raw pages → snapshot). Restate the chosen mode's tradeoff and
+  confirm before exporting. No ppt-master needed.
 
 ## Controller Hard Gates
 
@@ -264,6 +277,7 @@ Read exactly the subskill needed for the next step:
 | Operate existing artifacts: edit existing decks, reskin foreign HTML, lift/swap slides, convert/import existing material, round-trip recovery | `subskills/editor/SKILL.md`    |
 | Translate / localize an existing deck (or page range) into another language: backfill → parity branch-decision → verbatim text-pairs → apply → render (or in-place for lossy-backfill decks), plus embedded-iframe and brand-asset localization | `subskills/translator/SKILL.md` |
 | Publish confirmed HTML to Magic Page / Feishu hosting only                                                                                   | `subskills/publisher/SKILL.md` |
+| Export a faithful snapshot PPTX of the confirmed HTML deck (image per slide, text NOT editable)                                              | `subskills/pptx-exporter/SKILL.md` |
 | Quality-gate then import confirmed finished HTML into `FuQiang/feishu-slide-library` via PR and sync Cloudflare viewer                    | `subskills/importer/SKILL.md`  |
 | Parse uploaded materials into local `input/runtime-library/source-dossier.json` and normalize assets into `input/runtime-library/assets/`. A `.pptx` is converted (build_pptx) into a structured `canvas` deck.json — code reconstruction, no screenshots; hard pages → placeholder + reported | `subskills/parser/SKILL.md`    |
 | Rehearse how a validated deck may land with target customer or stakeholder roles                                                              | `subskills/simulator/SKILL.md` |

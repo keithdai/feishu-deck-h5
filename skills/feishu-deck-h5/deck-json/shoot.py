@@ -28,6 +28,8 @@ iteration, tripping over the same gotchas each time:
 Exit: 0 if every requested page was shot; 2 on bad input / engine missing; 3 if
 some requested pages were not found.
 """
+from __future__ import annotations
+
 import argparse
 import re
 import sys
@@ -147,6 +149,13 @@ def main(argv=None) -> int:
             except Exception:
                 pass
         page.wait_for_timeout(300)
+
+        # Hide present-mode chrome (nav arrows / page counter / mobile back+pageno)
+        # so it never lands in a screenshot. Slide content lives in .slide-frame,
+        # so suppressing the .deck-ui overlay is lossless.
+        page.add_style_tag(content=(
+            ".deck-ui, .fs-mobile-back, .fs-mobile-pageno"
+            " { display: none !important; }"))
 
         # Restart-on-enter (feishu-deck.js restartFrameMotion) replays a slide's
         # CSS animations and reloads its embedded iframes every time we navigate to
