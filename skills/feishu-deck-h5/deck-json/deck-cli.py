@@ -9,12 +9,15 @@ USAGE
 
 Read commands (no backup needed):
   list                        list slides as numbered table
-  get PATH                    print value at dotted path (e.g. slides.3.data.title)
+  get PATH                    print value at dotted path; a slides segment may be
+                              an index OR a slide key (slides.<key>.data.title)
   lint                        validate against schema (wrap validate-deck.py)
   show KEY                    pretty-print one slide's JSON
 
 Write commands (auto-backup + revalidate + rollback on schema fail):
-  set PATH VALUE              dotted-path set (VALUE auto-typed: int/bool/str/json)
+  set PATH VALUE              dotted-path set (VALUE auto-typed: int/bool/str/json);
+                              address a slide by key to avoid index off-by-one:
+                              set slides.<key>.data.html --from-file f
   set-accent KEY COLOR        slide.accent = COLOR
   set-decor KEY TOKENS        slide.decor = TOKENS (comma-sep, e.g. "blue-glow,grain")
   set-variant KEY VARIANT     for content/stats/flow only — also wipes data fields
@@ -22,6 +25,8 @@ Write commands (auto-backup + revalidate + rollback on schema fail):
   reorder FROM TO             move slides[FROM] to position TO (1-indexed)
   move-key KEY POSITION       safer than reorder — survives prior renumbering
   insert POSITION L [V] KEY   insert a scaffold slide at POSITION
+  add-section POSITION KEY --chapter C --title T [--label L]
+                              insert a filled section divider in one write
   delete KEY                  remove slide. MANDATORY confirm + backup.
   clone KEY NEW_KEY [POSITION]  duplicate KEY → NEW_KEY at POSITION (default after KEY)
   paste --from SRC --key K [--new-key NK] [POS]
@@ -48,6 +53,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
 import copy
 import hashlib
 import html
@@ -61,10 +67,21 @@ import tempfile
 import time
 from pathlib import Path
 
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows fallback; POSIX gets real locking.
+    fcntl = None
+
 HERE          = Path(__file__).resolve().parent
 SCHEMA_FILE   = HERE / "deck-schema.json"
 VALIDATE_DECK = HERE / "validate-deck.py"
 RENDER_DECK   = HERE / "render-deck.py"
+
+MUTATION_CMDS = {
+    "set", "set-page", "consolidate-css", "set-accent", "set-decor",
+    "set-notes", "set-variant", "hide", "unhide", "reorder", "move-key",
+    "insert", "add-section", "delete", "clone", "paste",
+}
 
 sys.path.insert(0, str(HERE))
 from _safe_write import contained_dest          # noqa: E402  (path-traversal guard)
@@ -102,6 +119,27 @@ def atomic_write_text(path, text: str, encoding: str = "utf-8") -> None:
         raise
 
 
+@contextlib.contextmanager
+def deck_mutation_lock(deck_path: Path):
+    """Serialize deck.json write commands across processes.
+
+    The optimistic mtime guard catches stale writes, but it cannot merge two
+    commands that both read before either writes. Holding this lock from read →
+    mutate → validate/write turns deck-cli into the single writer for a deck.
+    """
+    deck_path = Path(deck_path)
+    lock_path = deck_path.parent / f".{deck_path.name}.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "a+", encoding="utf-8") as fh:
+        if fcntl is not None:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
 # ---------------------------------------------------------------------------
 # Helpers — dotted-path get / set
 # ---------------------------------------------------------------------------
@@ -118,14 +156,35 @@ def parse_value(s: str):
     return s
 
 
+def _list_index(cur: list, seg: str) -> int:
+    """Resolve one dotted-path segment against a list. A pure integer is a 0-based
+    array index (back-compat: `slides.5`). A NON-integer is matched against each
+    element's "key" field, so `slides.<slide-key>` addresses a slide BY KEY —
+    stable across reorders and immune to the present-page-vs-array-index
+    off-by-one that _disabled / hidden slides introduce. (Hand-converting a page
+    number to an array index is the #1 way an edit silently clobbers the WRONG
+    slide; addressing by key removes the conversion entirely.)"""
+    s = seg.strip().strip("[]")
+    try:
+        return int(s)
+    except ValueError:
+        pass
+    for i, el in enumerate(cur):
+        if isinstance(el, dict) and el.get("key") == s:
+            return i
+    raise KeyError(
+        f"path segment '{seg}': not an integer index, and no list element "
+        f"has key '{s}'")
+
+
 def get_path(d, dotted: str):
-    """Walk a dotted path. Numeric segments index arrays.
+    """Walk a dotted path. Integer segments index arrays; a non-integer segment
+    on a list resolves by element "key" (e.g. `slides.<slide-key>.data.title`).
     Raises KeyError / IndexError on miss."""
     cur = d
     for seg in dotted.split("."):
         if isinstance(cur, list):
-            idx = int(seg)
-            cur = cur[idx]
+            cur = cur[_list_index(cur, seg)]
         elif isinstance(cur, dict):
             cur = cur[seg]
         else:
@@ -134,13 +193,14 @@ def get_path(d, dotted: str):
 
 
 def set_path(d, dotted: str, value):
-    """Set a dotted path. Creates intermediate dicts (NOT lists) as needed."""
+    """Set a dotted path. Integer segments index arrays; a non-integer segment on
+    a list resolves by element "key" (e.g. `slides.<slide-key>.data.html`).
+    Creates intermediate dicts (NOT lists) as needed."""
     segs = dotted.split(".")
     cur = d
     for seg in segs[:-1]:
         if isinstance(cur, list):
-            idx = int(seg)
-            cur = cur[idx]
+            cur = cur[_list_index(cur, seg)]
         elif isinstance(cur, dict):
             if seg not in cur or not isinstance(cur[seg], (dict, list)):
                 cur[seg] = {}
@@ -149,7 +209,7 @@ def set_path(d, dotted: str, value):
             raise KeyError(f"can't descend into {type(cur).__name__} at '{seg}'")
     last = segs[-1]
     if isinstance(cur, list):
-        cur[int(last)] = value
+        cur[_list_index(cur, last)] = value
     else:
         cur[last] = value
 
@@ -199,11 +259,13 @@ def backup_path(deck_path: Path, command: str) -> Path:
     return cand
 
 
-def prune_backups(deck_path: Path, keep: int = 15) -> int:
+def prune_backups(deck_path: Path, keep: int = 3) -> int:
     """Keep only the most-recent `keep` `<deck>.bak-pre-*` backups (by mtime),
     delete the rest. One backup is written per mutation, so an actively-edited
     deck otherwise accumulates them into the hundreds (a real deck dir held ~100).
-    Best-effort: never raises, returns the count deleted. (F-363)"""
+    Default retention is 3 (a TATA-deck retarget session left 17 behind at the
+    old default of 15 — user asked for a tighter window). Best-effort: never
+    raises, returns the count deleted. (F-363)"""
     try:
         baks = sorted(deck_path.parent.glob(deck_path.name + ".bak-pre-*"),
                       key=lambda p: p.stat().st_mtime, reverse=True)
@@ -233,19 +295,26 @@ def _edit_scope_keys(args, updated: dict):
     gate, so this change can never WEAKEN a gate it doesn't understand."""
     cmd = getattr(args, "cmd", None)
     if cmd in ("set-page", "set-accent", "set-decor", "set-notes",
-               "set-variant", "insert", "consolidate-css") and getattr(args, "key", None):
+               "set-variant", "insert", "add-section", "consolidate-css") \
+            and getattr(args, "key", None):
         return {args.key}
     if cmd == "set":
         path = getattr(args, "path", "") or ""
         if not path.startswith("slides"):
             return set()                        # deck-level scalar (deck.title, magic_move …)
-        # `set` indexes arrays with DOTS (slides.5.accent); also tolerate brackets.
-        m = re.match(r"slides[.\[](\d+)", path)
+        # `set` addresses a slide by DOT segment: an index (slides.5.accent) or a
+        # key (slides.<slide-key>.accent); also tolerate brackets. Resolve either
+        # form to the touched slide key so the gate stays scoped.
+        m = re.match(r"slides[.\[]([^.\]\[]+)", path)
         if m:
-            i = int(m.group(1))
+            seg = m.group(1)
             slides = updated.get("slides") or []
-            if 0 <= i < len(slides) and slides[i].get("key"):
-                return {slides[i]["key"]}
+            if seg.isdigit():
+                i = int(seg)
+                if 0 <= i < len(slides) and slides[i].get("key"):
+                    return {slides[i]["key"]}
+            elif any(s.get("key") == seg for s in slides):
+                return {seg}                    # key-addressed: slides.<key>.field
         return None                             # touches slides, unattributable → whole-deck gate
     return None
 
@@ -289,14 +358,15 @@ def _scope_demote(deck_path: Path, scope_keys, command: str) -> bool:
 
 def write_deck_with_validation(deck_path: Path, deck: dict, command: str,
                                 no_backup: bool = False,
-                                expected_mtime: float | None = None,
+                                expected_mtime: int | None = None,
                                 force: bool = False,
                                 scope_keys=None) -> bool:
     """Write deck back to disk, re-validate. On schema fail: rollback, return False.
 
     Optimistic lock (F-48): if `expected_mtime` is given and the file's current
-    mtime differs (another process wrote deck.json since we read it), refuse the
-    write so we don't silently clobber that change. `--force` bypasses the check.
+    mtime_ns differs (another process wrote deck.json since we read it), refuse
+    the write so we don't silently clobber that change. `--force` bypasses the
+    check.
     """
     # 0. Optimistic-lock check — another session may have written since we read.
     if expected_mtime is not None and not force:
@@ -307,8 +377,8 @@ def write_deck_with_validation(deck_path: Path, deck: dict, command: str,
                   f"since it was read (concurrent edit). Re-read and retry, or --force.",
                   file=sys.stderr)
             return False
-        cur_mtime = deck_path.stat().st_mtime
-        if abs(cur_mtime - expected_mtime) > 1e-6:
+        cur_mtime = deck_path.stat().st_mtime_ns
+        if cur_mtime != expected_mtime:
             print(f"deck-cli: REFUSING write — {deck_path.name} changed on disk "
                   f"since it was read (concurrent edit by another process). "
                   f"Re-read the deck and retry, or pass --force to overwrite.",
@@ -994,6 +1064,43 @@ def cmd_insert(deck: dict, args) -> tuple[int, dict | None]:
           f"{'/' + args.variant if args.variant else ''}")
     print(f"    NOTE: scaffold data is placeholder. Fill required fields via set commands "
           f"before render or it will fail schema-fit check.")
+    return 0, deck
+
+
+def cmd_add_section(deck: dict, args) -> tuple[int, dict | None]:
+    """Insert a filled section divider in one mutation.
+
+    This is the high-frequency "加一个章节页 01" path. Plain `insert section`
+    intentionally scaffolds TODO placeholders; this command avoids the follow-up
+    set calls when the chapter number/title are already known.
+    """
+    slides = deck.get("slides", [])
+    n = len(slides)
+    if not (1 <= args.position <= n + 1):
+        print(f"deck-cli: position out of range (1..{n+1})", file=sys.stderr)
+        return 1, None
+    if any(s.get("key") == args.key for s in slides):
+        print(f"deck-cli: key '{args.key}' already exists", file=sys.stderr)
+        return 1, None
+
+    chapter = str(args.chapter).strip()
+    if chapter and not chapter.endswith("."):
+        chapter = f"{chapter}."
+    scaffold = build_scaffold("section", None, args.key)
+    if scaffold is None:
+        print("deck-cli: internal error: section scaffold missing", file=sys.stderr)
+        return 1, None
+    scaffold["data"] = {"chapter_num": chapter, "title": args.title}
+    if args.lede:
+        scaffold["data"]["lede"] = args.lede
+    if args.screen_label:
+        scaffold["screen_label"] = args.screen_label
+
+    slides.insert(args.position - 1, scaffold)
+    print(f"  inserted section at position {args.position}: key={args.key} "
+          f"chapter={chapter!r} title={args.title!r}")
+    if args.screen_label:
+        print(f"    screen_label={args.screen_label!r}")
     return 0, deck
 
 
@@ -1732,6 +1839,119 @@ def cmd_new_deck(args) -> int:
 # CLI dispatch
 # ---------------------------------------------------------------------------
 
+def _run_existing_deck_command(args) -> int:
+    # 无感自动 backfill (spec §10 decision 3): paste into a LEGACY HTML-only deck
+    # (no deck.json, but a sibling index.html) → reverse-build the deck.json 中间层
+    # from the rendered DOM FIRST (each .slide → raw, lossless, no screenshots),
+    # so the paste then runs against a real deck.json. Only for `paste` — other
+    # commands keep the explicit "deck not found" error.
+    if args.cmd == "paste" and not args.deck.exists():
+        _sib = args.deck.parent / "index.html"
+        if _sib.exists():
+            import subprocess
+            _sync = Path(__file__).resolve().parent / "sync-index-to-deck.py"
+            print(f"deck-cli: dest has no deck.json — auto-backfilling from {_sib} "
+                  "before paste (legacy HTML deck)", file=sys.stderr)
+            _r = subprocess.run([sys.executable, str(_sync), str(_sib), str(args.deck)],
+                                capture_output=True, text=True)
+            if _r.returncode != 0 or not args.deck.exists():
+                print(f"deck-cli: auto-backfill failed:\n{_r.stderr or _r.stdout}",
+                      file=sys.stderr)
+                return 2
+
+    # Load deck (capture mtime_ns for the optimistic-lock check on write-back).
+    # For mutation commands this helper is called only after deck_mutation_lock()
+    # has been acquired, so load→mutate→write is one serialized transaction.
+    try:
+        deck_mtime = args.deck.stat().st_mtime_ns
+        deck = json.loads(args.deck.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        print(f"deck-cli: deck not found: {args.deck}", file=sys.stderr); return 2
+    except json.JSONDecodeError as e:
+        print(f"deck-cli: invalid JSON: {e}", file=sys.stderr); return 2
+
+    READ_CMDS = {"list": cmd_list, "get": cmd_get, "show": cmd_show,
+                 "get-page": cmd_get_page, "add-asset": cmd_add_asset,
+                 "inspect-text": cmd_inspect_text}
+    if args.cmd in READ_CMDS:
+        return READ_CMDS[args.cmd](deck, args)
+    if args.cmd == "lint":
+        return cmd_lint(args.deck, args)
+    if args.cmd == "render":
+        return cmd_render(args.deck, args)
+
+    # Write commands return (rc, deck_or_None)
+    WRITE_CMDS = {
+        "set":         cmd_set,
+        "set-page":    cmd_set_page,
+        "consolidate-css": cmd_consolidate_css,
+        "set-accent":  cmd_set_accent,
+        "set-decor":   cmd_set_decor,
+        "set-notes":   cmd_set_notes,
+        "set-variant": cmd_set_variant,
+        "hide":        cmd_hide,
+        "unhide":      cmd_unhide,
+        "reorder":     cmd_reorder,
+        "move-key":    cmd_move_key,
+        "insert":      cmd_insert,
+        "add-section": cmd_add_section,
+        "delete":      cmd_delete,
+        "clone":       cmd_clone,
+        "paste":       cmd_paste,
+    }
+    handler = WRITE_CMDS.get(args.cmd)
+    if not handler:
+        print(f"deck-cli: unknown command '{args.cmd}'", file=sys.stderr); return 1
+
+    # F-315: CLOBBER GUARD (Option A — auto-sync-if-lossless, else refuse) — before
+    # mutating deck.json, handle a sibling index.html that carries edits made after
+    # its last render (browser edit-mode ⌘S / hand-patch) and never synced back.
+    # Editing deck.json now and re-rendering would silently destroy them (deck.json
+    # is the source; index.html is regenerated from it). Checked here, where
+    # deck.json still matches the last render, so the verdict is unambiguous.
+    #   ok       → no un-synced edit; proceed (fast path).
+    #   autosync → edits are ALL lossless → fold them into deck.json FIRST (then the
+    #              command's edit layers on top; both survive), and RELOAD deck.
+    #   refuse   → lossy (canvas) / baked / chrome-only / error → stop and tell the
+    #              user. --force skips the whole guard and DISCARDS the edits.
+    if not getattr(args, "force", False):
+        from _index_sig import resolve_clobber, auto_sync as _idx_auto_sync
+        _idx = args.deck.parent / "index.html"
+        _action, _reason = resolve_clobber(args.deck, _idx)
+        if _action == "refuse":
+            _sync = Path(__file__).resolve().parent / "sync-index-to-deck.py"
+            print(f"deck-cli: REFUSING '{args.cmd}' — {_reason}", file=sys.stderr)
+            print("  → Inspect / recover first:", file=sys.stderr)
+            print(f"      python3 {_sync} --dry-run {_idx} {args.deck}", file=sys.stderr)
+            print("  → Or pass --force to edit deck.json anyway and DISCARD the "
+                  "un-synced index.html edits.", file=sys.stderr)
+            return 6
+        if _action == "autosync":
+            print(f"deck-cli: index.html has un-synced (lossless) browser edits — "
+                  f"folding them into deck.json before '{args.cmd}'…", file=sys.stderr)
+            _ok, _out = _idx_auto_sync(args.deck, _idx)
+            if not _ok:
+                print(f"deck-cli: auto-sync FAILED — refusing to proceed:\n{_out}",
+                      file=sys.stderr)
+                return 6
+            # auto-sync rewrote deck.json on disk → reload so the command's handler
+            # (and the optimistic-lock mtime) operate on the freshly-synced source.
+            deck = json.loads(args.deck.read_text(encoding="utf-8"))
+            deck_mtime = args.deck.stat().st_mtime_ns
+            print("deck-cli: ✓ folded browser edits into deck.json; continuing.",
+                  file=sys.stderr)
+
+    rc, updated = handler(deck, args)
+    if rc != 0 or updated is None:
+        return rc
+
+    ok = write_deck_with_validation(args.deck, updated, args.cmd, args.no_backup,
+                                    expected_mtime=deck_mtime,
+                                    force=getattr(args, "force", False),
+                                    scope_keys=_edit_scope_keys(args, updated))
+    return 0 if ok else 3
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="deck-cli.py", description=__doc__.split("\n")[0])
     ap.add_argument("deck", type=Path, help="path to deck.json")
@@ -1827,6 +2047,18 @@ def main(argv=None) -> int:
     sp.add_argument("layout"); sp.add_argument("variant", nargs="?", default=None)
     sp.add_argument("key")
 
+    sp = sub.add_parser("add-section",
+                        help="insert a filled section divider at position "
+                             "(chapter/title/label in one write)")
+    sp.add_argument("position", type=int)
+    sp.add_argument("key")
+    sp.add_argument("--chapter", required=True,
+                    help="chapter number, e.g. 01 or 01. (dot auto-added)")
+    sp.add_argument("--title", required=True, help="section title")
+    sp.add_argument("--screen-label", "--label", dest="screen_label", default=None,
+                    help="optional visible screen_label, e.g. 03")
+    sp.add_argument("--lede", default=None, help="optional section subtitle")
+
     sp = sub.add_parser("delete", help="delete slide by key (confirm + backup mandatory)")
     sp.add_argument("key")
 
@@ -1884,115 +2116,13 @@ def main(argv=None) -> int:
     # new-deck scaffolds a fresh file → handle BEFORE the load step (there is no
     # existing deck.json to read; cmd_new_deck builds + writes + validates one).
     if args.cmd == "new-deck":
-        return cmd_new_deck(args)
+        with deck_mutation_lock(args.deck):
+            return cmd_new_deck(args)
 
-    # 无感自动 backfill (spec §10 decision 3): paste into a LEGACY HTML-only deck
-    # (no deck.json, but a sibling index.html) → reverse-build the deck.json 中间层
-    # from the rendered DOM FIRST (each .slide → raw, lossless, no screenshots),
-    # so the paste then runs against a real deck.json. Only for `paste` — other
-    # commands keep the explicit "deck not found" error.
-    if args.cmd == "paste" and not args.deck.exists():
-        _sib = args.deck.parent / "index.html"
-        if _sib.exists():
-            import subprocess
-            _sync = Path(__file__).resolve().parent / "sync-index-to-deck.py"
-            print(f"deck-cli: dest has no deck.json — auto-backfilling from {_sib} "
-                  "before paste (legacy HTML deck)", file=sys.stderr)
-            _r = subprocess.run([sys.executable, str(_sync), str(_sib), str(args.deck)],
-                                capture_output=True, text=True)
-            if _r.returncode != 0 or not args.deck.exists():
-                print(f"deck-cli: auto-backfill failed:\n{_r.stderr or _r.stdout}",
-                      file=sys.stderr)
-                return 2
-
-    # Load deck (capture mtime for the optimistic-lock check on write-back)
-    try:
-        deck_mtime = args.deck.stat().st_mtime
-        deck = json.loads(args.deck.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        print(f"deck-cli: deck not found: {args.deck}", file=sys.stderr); return 2
-    except json.JSONDecodeError as e:
-        print(f"deck-cli: invalid JSON: {e}", file=sys.stderr); return 2
-
-    READ_CMDS = {"list": cmd_list, "get": cmd_get, "show": cmd_show,
-                 "get-page": cmd_get_page, "add-asset": cmd_add_asset,
-                 "inspect-text": cmd_inspect_text}
-    if args.cmd in READ_CMDS:
-        return READ_CMDS[args.cmd](deck, args)
-    if args.cmd == "lint":
-        return cmd_lint(args.deck, args)
-    if args.cmd == "render":
-        return cmd_render(args.deck, args)
-
-    # Write commands return (rc, deck_or_None)
-    WRITE_CMDS = {
-        "set":         cmd_set,
-        "set-page":    cmd_set_page,
-        "consolidate-css": cmd_consolidate_css,
-        "set-accent":  cmd_set_accent,
-        "set-decor":   cmd_set_decor,
-        "set-notes":   cmd_set_notes,
-        "set-variant": cmd_set_variant,
-        "hide":        cmd_hide,
-        "unhide":      cmd_unhide,
-        "reorder":     cmd_reorder,
-        "move-key":    cmd_move_key,
-        "insert":      cmd_insert,
-        "delete":      cmd_delete,
-        "clone":       cmd_clone,
-        "paste":       cmd_paste,
-    }
-    handler = WRITE_CMDS.get(args.cmd)
-    if not handler:
-        print(f"deck-cli: unknown command '{args.cmd}'", file=sys.stderr); return 1
-
-    # F-315: CLOBBER GUARD (Option A — auto-sync-if-lossless, else refuse) — before
-    # mutating deck.json, handle a sibling index.html that carries edits made after
-    # its last render (browser edit-mode ⌘S / hand-patch) and never synced back.
-    # Editing deck.json now and re-rendering would silently destroy them (deck.json
-    # is the source; index.html is regenerated from it). Checked here, where
-    # deck.json still matches the last render, so the verdict is unambiguous.
-    #   ok       → no un-synced edit; proceed (fast path).
-    #   autosync → edits are ALL lossless → fold them into deck.json FIRST (then the
-    #              command's edit layers on top; both survive), and RELOAD deck.
-    #   refuse   → lossy (canvas) / baked / chrome-only / error → stop and tell the
-    #              user. --force skips the whole guard and DISCARDS the edits.
-    if not getattr(args, "force", False):
-        from _index_sig import resolve_clobber, auto_sync as _idx_auto_sync
-        _idx = args.deck.parent / "index.html"
-        _action, _reason = resolve_clobber(args.deck, _idx)
-        if _action == "refuse":
-            _sync = Path(__file__).resolve().parent / "sync-index-to-deck.py"
-            print(f"deck-cli: REFUSING '{args.cmd}' — {_reason}", file=sys.stderr)
-            print("  → Inspect / recover first:", file=sys.stderr)
-            print(f"      python3 {_sync} --dry-run {_idx} {args.deck}", file=sys.stderr)
-            print("  → Or pass --force to edit deck.json anyway and DISCARD the "
-                  "un-synced index.html edits.", file=sys.stderr)
-            return 6
-        if _action == "autosync":
-            print(f"deck-cli: index.html has un-synced (lossless) browser edits — "
-                  f"folding them into deck.json before '{args.cmd}'…", file=sys.stderr)
-            _ok, _out = _idx_auto_sync(args.deck, _idx)
-            if not _ok:
-                print(f"deck-cli: auto-sync FAILED — refusing to proceed:\n{_out}",
-                      file=sys.stderr)
-                return 6
-            # auto-sync rewrote deck.json on disk → reload so the command's handler
-            # (and the optimistic-lock mtime) operate on the freshly-synced source.
-            deck = json.loads(args.deck.read_text(encoding="utf-8"))
-            deck_mtime = args.deck.stat().st_mtime
-            print("deck-cli: ✓ folded browser edits into deck.json; continuing.",
-                  file=sys.stderr)
-
-    rc, updated = handler(deck, args)
-    if rc != 0 or updated is None:
-        return rc
-
-    ok = write_deck_with_validation(args.deck, updated, args.cmd, args.no_backup,
-                                    expected_mtime=deck_mtime,
-                                    force=getattr(args, "force", False),
-                                    scope_keys=_edit_scope_keys(args, updated))
-    return 0 if ok else 3
+    if args.cmd in MUTATION_CMDS:
+        with deck_mutation_lock(args.deck):
+            return _run_existing_deck_command(args)
+    return _run_existing_deck_command(args)
 
 
 if __name__ == "__main__":

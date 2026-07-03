@@ -8,11 +8,13 @@ Doesn't try to exhaustively cover all 14 subcommands — just the high-value
 contract: backup → write → validate → rollback works.
 """
 import json
+import importlib.util
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -49,6 +51,34 @@ class DeckCliSmokeTest(unittest.TestCase):
         self.assertEqual(rc, 0, f"set failed: {err}")
         self.assertEqual(self._load()["slides"][0]["data"]["title"], "NEW TITLE")
 
+    def test_set_by_slide_key_lands_on_right_slide(self):
+        # Address a slide by KEY, not array index. Must hit that exact slide
+        # wherever it sits — no page#->index hand-conversion, so the off-by-one
+        # that _disabled/hidden slides cause can't clobber the wrong page.
+        slides = self._load()["slides"]
+        key = slides[3]["key"]                       # a mid-deck slide
+        rc, out, err = self._run("set", f"slides.{key}.data.title", "BY-KEY-OK")
+        self.assertEqual(rc, 0, f"set by key failed: {err}")
+        after = self._load()["slides"]
+        self.assertEqual(after[3]["data"]["title"], "BY-KEY-OK")
+        self.assertNotEqual(after[2].get("data", {}).get("title"), "BY-KEY-OK")
+        self.assertNotEqual(after[4].get("data", {}).get("title"), "BY-KEY-OK")
+
+    def test_set_by_unknown_key_errors_not_silent(self):
+        rc, out, err = self._run("set", "slides.no-such-key.data.title", "X")
+        self.assertNotEqual(rc, 0, "unknown slide key should error, not no-op")
+
+    def test_get_by_slide_key_path(self):
+        key = self._load()["slides"][2]["key"]
+        self._run("set", "slides.2.data.title", "ROUNDTRIP")
+        proc = subprocess.run(
+            [sys.executable, str(CLI), str(self.deck),
+             "get", f"slides.{key}.data.title"],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("ROUNDTRIP", proc.stdout)
+
     def test_set_invalid_enum_rolls_back(self):
         # accent enum doesn't include "cyan" (R49 encoded in schema) — set
         # should fail + rollback to .bak
@@ -74,6 +104,49 @@ class DeckCliSmokeTest(unittest.TestCase):
         self.assertIn(f"{src}-copy", keys)
         # original still present
         self.assertIn(src, keys)
+
+    def test_add_section_sets_chapter_title_and_label_in_one_write(self):
+        rc, out, err = self._run(
+            "add-section", "2", "chapter-01-ai-capability",
+            "--chapter", "01", "--title", "AI 的能力如何了？",
+            "--label", "03",
+        )
+        self.assertEqual(rc, 0, f"add-section failed: {err}\n{out}")
+        section = self._load()["slides"][1]
+        self.assertEqual(section["key"], "chapter-01-ai-capability")
+        self.assertEqual(section["layout"], "section")
+        self.assertEqual(section["screen_label"], "03")
+        self.assertEqual(section["data"]["chapter_num"], "01.")
+        self.assertEqual(section["data"]["title"], "AI 的能力如何了？")
+
+    def test_mutation_lock_covers_load_to_write_transaction(self):
+        spec = importlib.util.spec_from_file_location("deck_cli_mod", CLI)
+        deck_cli = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(deck_cli)
+        if deck_cli.fcntl is None:
+            self.skipTest("fcntl unavailable; deck mutation lock is POSIX-only")
+
+        with deck_cli.deck_mutation_lock(self.deck):
+            proc = subprocess.Popen(
+                [sys.executable, str(CLI), str(self.deck), "--yes",
+                 "set", "deck.title", "SUBPROCESS-TITLE"],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            time.sleep(0.25)
+            self.assertIsNone(
+                proc.poll(),
+                "subprocess mutation should wait for the deck lock before loading")
+            current = self._load()
+            current["deck"]["author"] = "PARENT-WRITE-WHILE-LOCKED"
+            self.deck.write_text(json.dumps(current, ensure_ascii=False), encoding="utf-8")
+
+        out, err = proc.communicate(timeout=10)
+        self.assertEqual(proc.returncode, 0, f"locked mutation failed: {err}\n{out}")
+        after = self._load()
+        self.assertEqual(after["deck"]["title"], "SUBPROCESS-TITLE")
+        self.assertEqual(after["deck"]["author"], "PARENT-WRITE-WHILE-LOCKED",
+                         "subprocess must load after the lock is released, not "
+                         "clobber a newer on-disk field with a stale pre-lock read")
 
 
 class DeckCliPasteDriftTest(unittest.TestCase):

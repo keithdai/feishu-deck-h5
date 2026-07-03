@@ -26,13 +26,14 @@ from typing import Any
 REPO = Path(__file__).resolve().parents[2]
 SELF_CHECK = Path(__file__).resolve().parent / "self_check.py"
 RUNS = REPO / "runs"
-CHECK_ONLY = REPO / "assets/check-only.py"
 MAGIC_PAGE_ASSETS = REPO / "assets/magic-page-assets.py"
 MAGIC_PAGE_PREFLIGHT = REPO / "assets/magic-page-preflight.py"
+MAGIC_IFRAME_FAAS = REPO / "assets/magic-iframe-faas.py"
 INLINE_ASSETS = REPO / "assets/inline-assets.py"
 DEFAULT_MAGIC_PAGE_PUBLISHER = REPO / "assets/magic-page-publish.js"
 DEFAULT_MAGIC_ASSET_UPLOADER = REPO / "assets/magic-upload.js"
 DEFAULT_MAGIC_BASE_URL = "https://magic.solutionsuite.cn"
+DEFAULT_MAGIC_MAX_HTML_CHARS = 900_000
 MAGIC_TOKEN_FILES = (
     Path.home() / ".magic-token",
     REPO / ".magic-token",
@@ -105,58 +106,6 @@ def normalize_list(values: list[str] | None, default: list[str]) -> list[str]:
             if part:
                 out.append(part)
     return out or default
-
-
-def audit_passed(output_dir: Path) -> bool:
-    report = output_dir / "audit-report.json"
-    if report.exists():
-        try:
-            payload = read_json(report)
-        except Exception:
-            payload = {}
-        verdict = str(payload.get("verdict") or payload.get("feishu_deck_h5_verdict") or "").lower()
-        status = str(payload.get("status") or "").lower()
-        if verdict == "pass" or status == "pass":
-            return True
-    md = output_dir / "AUDIT_REPORT.md"
-    if md.exists():
-        first = md.read_text(encoding="utf-8", errors="ignore").splitlines()[:5]
-        joined = " ".join(first).lower()
-        return "feishu-deck-h5 verdict: pass" in joined or "verdict: pass" in joined
-    return False
-
-
-def run_publish_gate(html_path: Path, output_dir: Path, *, label: str = "publish-gate", visual: bool = True) -> dict[str, Any]:
-    """Validate the EXACT HTML bytes about to be published.
-
-    Fail-closed: runs assets/check-only.py against html_path rather than reusing a
-    stale render-time audit verdict.
-
-    visual=True (pre-publish gate on the ORIGINAL bytes): `--gate ingest`, which
-    auto-enables strict + the headless Chromium visual scan + the byte-path rules
-    (notably R-BAKED-DOM).
-
-    visual=False (re-check of the FINAL working_html AFTER asset prep): `--strict
-    --no-visual` — strict + all byte/source rules (R-BAKED-DOM is a byte-level rule
-    that runs on both paths) but NO browser scan. Asset prep only swaps resource
-    encodings (data:/local → TOS URLs) and never moves a pixel, so a second
-    whole-deck visual scan of the rewritten bytes is redundant with the pre-publish
-    gate (and the F-285 post-publish self-check opens the real URL). Skipping it
-    avoids re-running headless Chromium over a large publish artifact — the single
-    biggest chunk of a slow publish — and also sidesteps the --gate PyYAML
-    requirement on this second pass.
-    """
-    report_path = output_dir / f"PUBLISH_QUALITY_REPORT-{label}.md"
-    cmd = [sys.executable, str(CHECK_ONLY), str(html_path)]
-    cmd += ["--gate", "ingest"] if visual else ["--strict", "--no-visual"]
-    cmd += ["--report", str(report_path)]
-    step = subprocess_record(cmd, cwd=REPO, log_path=output_dir / f"publisher-{label}.log")
-    return {
-        "ok": step["ok"],
-        "report": repo_rel(report_path) if report_path.exists() else "",
-        "step": summarize_step(step),
-        "reason": "" if step["ok"] else (step["stderr"] or step["stdout"] or "publish quality gate failed"),
-    }
 
 
 def task_dirs(task_id: str) -> tuple[Path, Path]:
@@ -369,7 +318,7 @@ def remaining_unhosted_dependencies(html_path: Path) -> list[str]:
         tag = match.group("tag").lower()
         attr = match.group("attr").lower()
         ref = match.group(4).strip()
-        if attr == "href" and tag != "link":
+        if attr == "href" and tag not in {"link", "image"}:
             continue
         if is_unhosted_dependency(ref):
             refs.append(ref)
@@ -385,6 +334,122 @@ def remaining_unhosted_dependencies(html_path: Path) -> list[str]:
             seen.add(ref)
             out.append(ref)
     return out
+
+
+def audit_publish_integrity(html_path: Path, output_dir: Path) -> dict[str, Any]:
+    """Lightweight publish gate: only block references that cannot survive Magic Page.
+
+    This intentionally does not run deck-validator/check-only visual or design
+    rules. The publish path follows the slide-library resource-only stance:
+    fail on unresolved runtime dependencies and residual inline payloads, then
+    rely on post-publish self-check for the final hosted URL.
+    """
+    residual = residual_data_payloads(html_path)
+    unhosted = remaining_unhosted_dependencies(html_path)
+    reasons: list[str] = []
+    if residual:
+        reasons.append(
+            "inline data: payloads remain after asset preparation: " + ", ".join(residual)
+        )
+    if unhosted:
+        sample = ", ".join(unhosted[:8])
+        more = f" (+{len(unhosted) - 8} more)" if len(unhosted) > 8 else ""
+        reasons.append(f"unhosted runtime dependencies remain: {sample}{more}")
+    ok = not reasons
+    report_path = output_dir / "PUBLISH_INTEGRITY_REPORT.md"
+    lines = [
+        "# Publish Integrity Report",
+        "",
+        f"- ok: {ok}",
+        f"- html: {repo_rel(html_path)}",
+        f"- residual_data_payloads: {len(residual)}",
+        f"- unhosted_dependencies: {len(unhosted)}",
+        "",
+    ]
+    if residual:
+        lines.extend(["## Residual data payloads", ""])
+        lines.extend(f"- `{item}`" for item in residual)
+        lines.append("")
+    if unhosted:
+        lines.extend(["## Unhosted dependencies", ""])
+        lines.extend(f"- `{item}`" for item in unhosted)
+        lines.append("")
+    if not residual and not unhosted:
+        lines.append("No unresolved local/data runtime references found in the publish-bound HTML.")
+    report_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    return {
+        "ok": ok,
+        "html": repo_rel(html_path),
+        "report": repo_rel(report_path),
+        "residual_data_payloads": residual,
+        "unhosted_dependencies": unhosted,
+        "reason": "; ".join(reasons),
+    }
+
+
+def html_char_count(path: Path) -> int:
+    return len(path.read_text(encoding="utf-8", errors="ignore"))
+
+
+def write_publish_size_report(output_dir: Path, payload: dict[str, Any]) -> None:
+    report_path = output_dir / "PUBLISH_SIZE_REPORT.md"
+    lines = [
+        "# Publish Size Report",
+        "",
+        f"- ok: {payload.get('ok')}",
+        f"- max_html_chars: {payload.get('max_html_chars')}",
+        f"- final_html: {payload.get('final_html')}",
+        f"- final_chars: {payload.get('final_chars')}",
+        f"- auto_externalized_inline_code: {payload.get('auto_externalized_inline_code')}",
+        "",
+        "## Attempts",
+        "",
+    ]
+    for attempt in payload.get("attempts") or []:
+        lines.extend(
+            [
+                f"- mode: `{attempt.get('mode')}`",
+                f"  html: `{attempt.get('html')}`",
+                f"  chars: {attempt.get('chars')}",
+                f"  ok: {attempt.get('ok')}",
+            ]
+        )
+    if payload.get("reason"):
+        lines.extend(["", f"reason: {payload.get('reason')}"])
+    report_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+
+
+def make_magic_assets_cmd(
+    *,
+    package_source: Path,
+    packaged: Path,
+    uploader: Path,
+    base_url: str,
+    task_id: str,
+    source_html: Path,
+    upload_workers: int,
+    keep_inline_code: bool,
+) -> list[str]:
+    cmd = [
+        sys.executable,
+        str(MAGIC_PAGE_ASSETS),
+        str(package_source),
+        "--out",
+        str(packaged),
+        "--uploader",
+        str(uploader),
+        "--base-url",
+        base_url,
+        "--key-prefix",
+        f"feishu-deck-h5/{task_id}",
+        "--asset-base-dir",
+        str(source_html.parent),
+        "--upload-workers",
+        str(upload_workers),
+    ]
+    if keep_inline_code:
+        cmd.append("--keep-inline-code")
+    return cmd
 
 
 def publish_magic_page(
@@ -463,29 +528,73 @@ def publish_magic_page(
             payload = magic_failure("inline-assets failed", prepared, base_url, inline)
             write_publish_reports(output_dir, payload)
             return payload
+        package_source = prepared
+        if not args.skip_magic_iframe_faas:
+            iframe_ready = output_dir / "magic-page-iframes.html"
+            iframe_report = output_dir / "magic-iframe-faas.json"
+            faas_record_id = args.magic_iframe_faas_record_id
+            if not faas_record_id and iframe_report.exists():
+                try:
+                    faas_record_id = str((read_json(iframe_report).get("faas") or {}).get("record_id") or "")
+                except Exception:
+                    faas_record_id = ""
+            faas_name = "feishu_deck_h5_" + slugify(task_id.replace("/", "-"), "deck")[:40] + "_iframes"
+            iframe_cmd = [
+                sys.executable,
+                str(MAGIC_IFRAME_FAAS),
+                str(prepared),
+                "--out",
+                str(iframe_ready),
+                "--uploader",
+                str(uploader),
+                "--base-url",
+                base_url,
+                "--key-prefix",
+                f"feishu-deck-h5/{task_id}",
+                "--asset-base-dir",
+                str(source_html.parent),
+                "--report",
+                str(iframe_report),
+                "--faas-name",
+                faas_name,
+                "--upload-workers",
+                str(args.magic_upload_workers),
+            ]
+            if faas_record_id:
+                iframe_cmd += ["--faas-record-id", faas_record_id]
+            if args.magic_iframe_faas_dry_run:
+                iframe_cmd.append("--dry-run")
+            iframe = subprocess_record(
+                iframe_cmd,
+                cwd=REPO,
+                log_path=output_dir / "publisher-magic-iframe-faas.log",
+                timeout=NETWORK_SUBPROCESS_TIMEOUT,
+            )
+            if not iframe["ok"]:
+                payload = magic_failure("magic iframe FaaS preparation failed", prepared, base_url, iframe)
+                write_publish_reports(output_dir, payload)
+                return payload
+            if iframe_ready.exists():
+                package_source = iframe_ready
         packaged = output_dir / "magic-page-ready.html"
-        package_cmd = [
-            sys.executable,
-            str(MAGIC_PAGE_ASSETS),
-            str(prepared),
-            "--out",
-            str(packaged),
-            "--uploader",
-            str(uploader),
-            "--base-url",
-            base_url,
-            "--key-prefix",
-            f"feishu-deck-h5/{task_id}",
-        ]
         # delivery-9 / P1#4: keep the framework runtime + per-slide CSS INLINE by
         # default. Externalizing them turns feishu-deck.js into a hash-named hosted
         # script that the publish-bytes runtime-presence check no longer recognizes
         # ("runtime missing" false negative — it cost a manual round-trip on every
-        # publish). Code is <0.5 MB, so keeping it inline never threatens the body
-        # limit; only heavy media is externalized. Opt out with
-        # --externalize-inline-code if a deck genuinely needs it.
-        if not args.externalize_inline_code:
-            package_cmd.append("--keep-inline-code")
+        # publish). Keep inline first for small decks, then run a local Magic Page
+        # body-size gate; if the inline artifact is too large, automatically
+        # repackage with code externalized before the API call.
+        keep_inline_code = not args.externalize_inline_code
+        package_cmd = make_magic_assets_cmd(
+            package_source=package_source,
+            packaged=packaged,
+            uploader=uploader,
+            base_url=base_url,
+            task_id=task_id,
+            source_html=source_html,
+            upload_workers=args.magic_upload_workers,
+            keep_inline_code=keep_inline_code,
+        )
         package = subprocess_record(
             package_cmd,
             cwd=REPO,
@@ -495,48 +604,94 @@ def publish_magic_page(
             payload = magic_failure("magic-page-assets failed", html_path, base_url, package)
             write_publish_reports(output_dir, payload)
             return payload
-        working_html = packaged
-
-    residual = residual_data_payloads(working_html)
-    if residual:
-        payload = magic_failure(
-            f"Magic Page HTML still contains inline data: payloads ({', '.join(residual)}); "
-            "these must be uploaded to TOS before publishing",
-            working_html,
-            base_url,
-            None,
+        max_html_chars = int(args.magic_max_html_chars or DEFAULT_MAGIC_MAX_HTML_CHARS)
+        attempts: list[dict[str, Any]] = []
+        final_chars = html_char_count(packaged)
+        attempts.append(
+            {
+                "mode": "keep-inline-code" if keep_inline_code else "externalize-inline-code",
+                "html": repo_rel(packaged),
+                "chars": final_chars,
+                "ok": final_chars <= max_html_chars,
+            }
         )
-        write_publish_reports(output_dir, payload)
-        return payload
-    unhosted = remaining_unhosted_dependencies(working_html)
-    if unhosted:
-        sample = ", ".join(unhosted[:8])
-        more = f" (+{len(unhosted) - 8} more)" if len(unhosted) > 8 else ""
-        payload = magic_failure(
-            f"Magic Page HTML still contains unhosted runtime dependencies: {sample}{more}",
-            working_html,
-            base_url,
-            None,
-        )
-        write_publish_reports(output_dir, payload)
-        return payload
-
-    # subskill-2: validate the EXACT bytes about to be published. asset prep
-    # (inline-assets + magic-page-assets URL rewriting) produced a NEW artifact
-    # that no prior render-time audit ran on; re-run the gate on working_html so
-    # R-BAKED-DOM and friends are caught on the publish-bound bytes. Fail-closed.
-    if not args.allow_unaudited:
-        final_gate = run_publish_gate(working_html, output_dir, label="finalbytes", visual=False)
-        if not final_gate["ok"]:
+        auto_externalized = False
+        if keep_inline_code and final_chars > max_html_chars:
+            inline_too_large = output_dir / "magic-page-ready.keep-inline-too-large.html"
+            try:
+                packaged.replace(inline_too_large)
+            except OSError:
+                inline_too_large = packaged
+            externalized_cmd = make_magic_assets_cmd(
+                package_source=package_source,
+                packaged=packaged,
+                uploader=uploader,
+                base_url=base_url,
+                task_id=task_id,
+                source_html=source_html,
+                upload_workers=args.magic_upload_workers,
+                keep_inline_code=False,
+            )
+            externalized = subprocess_record(
+                externalized_cmd,
+                cwd=REPO,
+                log_path=output_dir / "publisher-magic-assets-externalized.log",
+            )
+            if not externalized["ok"]:
+                payload = magic_failure(
+                    "magic-page-assets failed while auto-externalizing inline code after HTML size preflight",
+                    html_path,
+                    base_url,
+                    externalized,
+                )
+                write_publish_reports(output_dir, payload)
+                return payload
+            auto_externalized = True
+            final_chars = html_char_count(packaged)
+            attempts[0]["html"] = repo_rel(inline_too_large)
+            attempts.append(
+                {
+                    "mode": "externalize-inline-code",
+                    "html": repo_rel(packaged),
+                    "chars": final_chars,
+                    "ok": final_chars <= max_html_chars,
+                }
+            )
+        size_payload = {
+            "ok": final_chars <= max_html_chars,
+            "max_html_chars": max_html_chars,
+            "final_html": repo_rel(packaged),
+            "final_chars": final_chars,
+            "auto_externalized_inline_code": auto_externalized,
+            "attempts": attempts,
+            "reason": "" if final_chars <= max_html_chars else (
+                f"Magic Page HTML body is {final_chars} chars, over the {max_html_chars} char limit"
+            ),
+        }
+        write_publish_size_report(output_dir, size_payload)
+        if not size_payload["ok"]:
             payload = magic_failure(
-                "publish-bytes validator gate failed (re-check of the final published HTML)"
-                + (f": {final_gate['reason']}" if final_gate.get("reason") else ""),
-                working_html,
+                "publish artifact size check failed before Magic Page API call: " + size_payload["reason"],
+                packaged,
                 base_url,
                 None,
             )
+            payload["size"] = size_payload
             write_publish_reports(output_dir, payload)
             return payload
+        working_html = packaged
+
+    integrity = audit_publish_integrity(working_html, output_dir)
+    if not integrity["ok"]:
+        payload = magic_failure(
+            "publish artifact integrity check failed: " + integrity["reason"],
+            working_html,
+            base_url,
+            None,
+        )
+        payload["integrity"] = integrity
+        write_publish_reports(output_dir, payload)
+        return payload
 
     script = args.magic_page_script or optional_path(os.environ.get("FEISHU_DECK_H5_MAGIC_PAGE_PUBLISHER", "")) or DEFAULT_MAGIC_PAGE_PUBLISHER
     if not script.exists():
@@ -601,15 +756,6 @@ def write_publish_reports(output_dir: Path, payload: dict[str, Any]) -> None:
     (output_dir / report_name).write_text("\n".join(lines), encoding="utf-8")
 
 
-def summarize_step(step: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "ok": step["ok"],
-        "returncode": step["returncode"],
-        "stderr": step["stderr"][:1200],
-        "stdout": step["stdout"][:1200],
-    }
-
-
 def _load_self_check():
     """Load subskills/publisher/self_check.py by path (sibling module)."""
     spec = importlib.util.spec_from_file_location("publisher_self_check", SELF_CHECK)
@@ -672,7 +818,11 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--task-id")
     ap.add_argument("--html", type=Path, help="confirmed .html/.htm artifact to publish")
     ap.add_argument("--title")
-    ap.add_argument("--allow-unaudited", action="store_true", help="bypass deck-validator pass requirement for local/debug use")
+    ap.add_argument(
+        "--allow-unaudited",
+        action="store_true",
+        help="deprecated no-op; publisher now runs resource-integrity checks instead of deck-validator",
+    )
     ap.add_argument("--dry-run", action="store_true", help="simulate publishing without external writes")
 
     ap.add_argument("--magic-page-script", type=Path)
@@ -681,12 +831,22 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--magic-page-dry-run", action="store_true")
     ap.add_argument("--magic-page-open-source", action="store_true")
     ap.add_argument("--skip-magic-asset-prepare", action="store_true")
+    ap.add_argument("--skip-magic-iframe-faas", action="store_true",
+                    help="do not rewrite local HTML iframes through a Magic FaaS text/html proxy")
+    ap.add_argument("--magic-iframe-faas-record-id", default="",
+                    help="existing Magic FaaS record id to update for local iframe HTML proxying")
+    ap.add_argument("--magic-iframe-faas-dry-run", action="store_true",
+                    help="rewrite local iframe HTML through a deterministic fake FaaS URL for tests")
+    ap.add_argument("--magic-upload-workers", type=int, default=6,
+                    help="parallel upload workers for Magic Page asset and iframe preparation")
     # delivery-8: oversized-resource pre-flight (run before the upload API).
     ap.add_argument("--no-compress-oversized", action="store_true",
                     help="do NOT auto-compress oversized videos; instead fail the publish with a "
                          "report listing every oversized resource + the exact fix command")
     ap.add_argument("--magic-max-resource-bytes", type=int, default=64 * 1024 * 1024,
                     help="per-resource size limit enforced by the pre-flight (default 64 MiB, Magic Page's limit)")
+    ap.add_argument("--magic-max-html-chars", type=int, default=DEFAULT_MAGIC_MAX_HTML_CHARS,
+                    help="Magic Page HTML body character limit; publisher auto-externalizes inline code before calling the API when exceeded")
     # delivery-9 / P1#4: framework runtime + CSS stay inline by default so the
     # publish-bytes runtime check still recognizes the player. Opt out only if a
     # deck genuinely needs its code externalized.
@@ -722,23 +882,6 @@ def main(argv: list[str] | None = None) -> int:
         output_dir.mkdir(parents=True, exist_ok=True)
 
     html_path = resolve_html(args, output_dir)
-
-    # Fail-closed validator gate: validate the EXACT artifact bytes about to be
-    # published, regardless of whether a deck.json happens to sit in output_dir.
-    # (subskill-1 / subskill-2: absence of deck.json must NOT silently disable
-    # the gate, and we never reuse a stale render-time audit verdict.)
-    if not args.allow_unaudited:
-        if not html_path:
-            raise SystemExit(
-                "publisher: deck-validator pass verdict is required before publishing "
-                "(no HTML artifact to validate; pass --allow-unaudited only for local/debug)"
-            )
-        gate = run_publish_gate(html_path, output_dir, label="prepublish")
-        if not gate["ok"]:
-            raise SystemExit(
-                "publisher: deck-validator gate failed on the artifact to be published"
-                + (f": {gate['reason']}" if gate.get("reason") else "")
-            )
 
     title = args.title or (read_json(output_dir / "deck.json").get("title") if (output_dir / "deck.json").exists() else "") or (html_path.stem if html_path else task_id)
 

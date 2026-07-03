@@ -5,11 +5,11 @@ description: |
   汇报材料, 客户提案, h5 deck, 16:9 网页演示, HTML deck generation/editing/validation,
   source parsing, Magic Page/Miaobi/html-box publishing, and feishu-slide-library
   importing. Routes work to subskills; generation is DeckJSON/render-deck first,
-  normally raw-first, with validation before handoff or publish. Can also export a
-  PPTX via the self-contained pptx-exporter subskill (svg_to_pptx + svg_finalize
-  vendored in — no ppt-master needed): snapshot (faithful image-per-slide, not
-  editable) or native/hybrid (`deck-to-svg --pptx` — schema pages → editable vector,
-  raw pages → snapshot).
+  normally raw-first, with validation before handoff or import; publishing uses the
+  publisher's lightweight artifact-integrity gate. Can also export a PPTX via the
+  self-contained pptx-exporter subskill (svg_to_pptx + svg_finalize vendored in —
+  no ppt-master needed): snapshot (faithful image-per-slide, not editable) or
+  native/hybrid (`deck-to-svg --pptx` — schema pages → editable vector, raw → snapshot).
 ---
 
 # feishu-deck-h5
@@ -101,9 +101,11 @@ These gates apply before dispatching to any subskill:
    and that is the gate to run after each edit. The whole-deck validator path
    (`render-deck.py --final` / `finalize.sh` / a whole-deck `check-only`) is the
    DELIVERY gate — run it before local handoff to the user, simulator use, or
-   publisher / importer confirmation, NOT after every intermediate edit. Either
-   way the locked HTML must pass its appropriate gate before that step; never
-   hand-write / patch around the gate. (A framework / CSS change re-runs only the
+   importer confirmation, NOT after every intermediate edit. Magic Page publishing
+   is gated separately by the publisher's resource / reference integrity checks,
+   not by whole-deck validator. Either way the locked HTML must pass its
+   appropriate gate before that step; never hand-write / patch around the gate.
+   (A framework / CSS change re-runs only the
    VISUAL audit deck-wide; content + making-of snapshot stay scoped — F-335.)
    - The validator must be EXECUTED, not read. `validate.py` contract:
      exit 0 = pass · 1 = fail (delivery-blocking) · 2 = file-not-found.
@@ -128,15 +130,22 @@ These gates apply before dispatching to any subskill:
   requested page-level action.
 - For page references, `page N`, URL `#N`, and frame index N are canonical. Old
   `screen_label` numeric prefixes are labels, not source-of-truth page numbers.
-- **Single-page edit = scoped loop, not a whole-deck pass.** The canonical
-  intermediate edit is: `deck-cli.py set-page` (or `set --from-file`) →
-  `render-deck.py --iter` → glance at the ONE changed page. Auto-scope already
-  scopes the static gate AND the making-of snapshot to the changed page(s); a
-  framework / CSS change only re-runs the VISUAL audit deck-wide (content +
-  snapshot stay scoped). Do NOT run a whole-deck validate (`finalize.sh` /
-  `check-only` over all pages / `render --final`) on an intermediate one-page
-  edit — that is the #1 cause of "改一页却渲染 / 校验 / 截图很多页". Reserve the
-  whole-deck pass for a delivery checkpoint, a structural change, or `--final`.
+- **Single-page edit = preview-first scoped loop, not a whole-deck pass.** The
+  canonical raw/bespoke visual loop is: `deck-cli.py set-page` (or
+  `set --from-file`) → `preview-slide.py --key <K>` for fast layout/rule
+  feedback → one real `render-deck.py --scope <K> --shoot` (or `--iter`) only
+  when the page is visually ready. Auto-scope already scopes the static gate AND
+  the making-of snapshot to the changed page(s); a framework / CSS change only
+  re-runs the VISUAL audit deck-wide (content + snapshot stay scoped). Do NOT run
+  a whole-deck validate (`finalize.sh` / `check-only` over all pages /
+  `render --final`) on an intermediate one-page edit — that is the #1 cause of
+  "改一页却渲染 / 校验 / 截图很多页". Reserve the whole-deck pass for a delivery
+  checkpoint, a structural change, or `--final`.
+- **Pure asset swaps use fast paths before the raw-page loop.** If the user only
+  asks to replace text or swap an existing slide image, use the Editor fast tools
+  (`fast-text.py` / `fast-image.py`) and skip `set-page`, preview, and render
+  unless the page also needs layout/crop/CSS changes. Prefer the stable slide key
+  over `#N` when the deck may contain hidden slides or drifted labels.
 - **Fastest inner loop for a raw-page visual nudge = `preview-slide.py`, not a
   render round-trip.** For pure layout / text / wrapping / color iteration on ONE
   slide, `deck-json/preview-slide.py <deck.json> --key <slide_key>` drops that
@@ -148,8 +157,12 @@ These gates apply before dispatching to any subskill:
   whole-deck / cross-slide rules (R29-32 / R36 / R48 / L1 / R-CSSVAR / R-DECK-*),
   and JS-motion / iframe-embed / fitText do not run. So iterate with
   `preview-slide.py --key`, then commit + run the REAL gate once at the end with
-  `render-deck.py <deck.json> . --scope <key> --final` (deck-wide drift,
-  present-mode chrome, making-of snapshot). See its `--help` for the caveats.
+  `render-deck.py <deck.json> . --scope <key> --shoot` (or `--final` at delivery
+  when deck-wide drift / present-mode chrome / making-of snapshot must run). See
+  its `--help` for the caveats. If that real gate prints a distribution advisory,
+  fix one obvious imbalance round; otherwise mark intentional with slide
+  `allow:["imbalance"]` / a delivery note instead of silently ignoring it or
+  entering an open-ended render loop.
 
 ## Controller Communication Contract
 
@@ -333,8 +346,8 @@ when» in §Multi-Agent Dispatch):
 4. **Validator** before a DELIVERY checkpoint (not every intermediate edit —
    Hard Gate 4). Whether the HTML came from Renderer or a later Editor pass, run
    the whole-deck Validator and fix non-zero findings before local delivery to
-   the user or publish confirmation; intermediate scoped edits gate via
-   `render --iter`. Spawn a Validator worker when multi-agent dispatch is
+   the user or slide-library import confirmation; intermediate scoped edits gate
+   via `render --iter`. Spawn a Validator worker when multi-agent dispatch is
    available.
 5. **Simulator** only if the user asks for pitch rehearsal, customer reaction
    simulation, stakeholder objections, or improvement advice after local HTML
@@ -367,8 +380,10 @@ is INLINE):
    re-rendered. Spawn a Renderer worker when multi-agent dispatch is available.
 5. After Editor, Translator, or Renderer changes, gate appropriately: an
    intermediate scoped edit via `render --iter`; the whole-deck **Validator**
-   before a DELIVERY checkpoint (local delivery to the user or publish
-   confirmation — Hard Gate 4). Fix non-zero findings before that checkpoint.
+   before a DELIVERY checkpoint (local delivery to the user or slide-library
+   import confirmation — Hard Gate 4). Magic Page publishing uses publisher
+   artifact-integrity checks instead of whole-deck validator. Fix non-zero
+   findings before that checkpoint.
 6. Use **Simulator** only after the deck has passed Validator and the local HTML
    artifact has been delivered, when the user asks for rehearsal or improvement
    advice.
@@ -386,9 +401,9 @@ is INLINE):
   from its real DOM before it is operated on. Editing is uniform across canvas /
   raw / schema slides: render → edit → sync back to `deck.json` → re-render.
 - Slide-level edits go through `deck-json/deck-cli.py` (`set-page` /
-  `set --from-file` for fragment payloads) — it carries the optimistic lock,
-  auto-backup, schema-fail rollback, and the pre-write lint. Ad-hoc scripts
-  that write deck.json directly are an anti-pattern (see editor subskill,
+  `set --from-file` for fragment payloads) — it carries the single-writer file
+  lock, optimistic mtime_ns guard, auto-backup, schema-fail rollback, and the
+  pre-write lint. Ad-hoc scripts that write deck.json directly are an anti-pattern (see editor subskill,
   "canonical loop"). Iterate with `render-deck.py --iter`; deliver with
   `--final`. The full deck.json / deck-cli / exit-code state + error contract is
   in `references/deck-state-contract.md`; the full anti-pattern table is in
@@ -423,6 +438,12 @@ is INLINE):
   new generation, create a run with `assets/new-run.sh <slug>` and announce the
   absolute run path. Use a short ASCII slug derived from the topic/customer; do
   not use a bare timestamp unless there is no usable topic.
+- If the request is only a standard cover starter deck (title + speaker + date,
+  no body outline/source files/custom design), use
+  `assets/new-cover-deck.py` as the narrow fast path. It creates the run,
+  minimal design artifacts, `deck.json`, one `render-deck.py --final` gate, and
+  a named inline HTML deliverable; do not add a second `finalize.sh local`
+  validation pass unless the user asked for a zip or library ingest.
 - Inputs live in `runs/<...>/input/`; parser output lives in
   `input/runtime-library/`, with `source-dossier.json`, `assets/`,
   `source-library/raw/`, and `source-library/fetched/`.
@@ -433,8 +454,10 @@ is INLINE):
 - Simulator writes `runs/<...>/output/pitch-rehearsal.json` and
   `PITCH_REHEARSAL.md`; it does not publish, ingest, or automatically modify the
   deck.
-- Publisher must not publish until the user has confirmed the exact HTML artifact,
-  and must not ingest into slide-library.
+- Publisher must not publish until the user has confirmed the exact HTML artifact
+  and the publisher artifact-integrity checks pass. It must not require
+  deck-validator/check-only visual or design gates by default, and must not ingest
+  into slide-library.
 - Importer must not ingest until the user has confirmed the exact finished HTML
   artifact for `FuQiang/feishu-slide-library`. It must run quality gate before
   ingest, then use the slide-library PR/confirm flow to sync the
@@ -457,6 +480,12 @@ is INLINE):
   `deck-json/locate-slide.py` for source/target lookup and
   `render-deck.py --renumber` on target DeckJSON when labels need to match true
   frame order.
+- Single-page LIFT+SWAP into an existing slot uses
+  `deck-json/lift-swap.py SRC#index DST#index`, not a manual delete+paste
+  sequence. The wrapper understands pasted `file://...#N` URLs, keeps the target
+  slot key/label, backs up, and rolls back if page count or key order changes.
+  Follow it with one scoped `render-deck.py --scope N --shoot` only; do not
+  renumber as part of a same-slot replacement.
 - To see a deck's REAL page map (never `grep` a rendered HTML for `data-slide-key`
   — it counts CSS-rule + JS-template hits, not slides), run
   `deck-json/deck-map.py <index.html | deck.json>`: it reads only the
