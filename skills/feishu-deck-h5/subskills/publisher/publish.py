@@ -599,6 +599,7 @@ def publish_magic_page(
             package_cmd,
             cwd=REPO,
             log_path=output_dir / "publisher-magic-assets.log",
+            timeout=2400,
         )
         if not package["ok"]:
             payload = magic_failure("magic-page-assets failed", html_path, base_url, package)
