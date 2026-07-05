@@ -10,6 +10,26 @@ library. The main table is `Materials`: one row is one reusable page-level
 material with a human/agent identifier, searchable material_description,
 thumbnail, and the original low-level `deck.json` slide payload.
 
+## Standalone Export Dependencies
+
+`deck-library` can be exported as a standalone Skill, but it is an orchestration
+layer and assumes the target environment already has the renderer Skill/toolchain:
+
+- Required sibling Skill: `skills/feishu-deck-h5/`.
+- Required renderer tools: `skills/feishu-deck-h5/deck-json/render-deck.py`,
+  `skills/feishu-deck-h5/deck-json/deck-cli.py`, and
+  `skills/feishu-deck-h5/assets/validate.py`.
+- Required CLI: `lark-cli` with access to the target Feishu Base.
+- Required Base schema: `Decks` and `Materials` tables matching
+  `references/base-schema.md`, including attachment fields for `deck_json`,
+  `inline_html`, `assets_zip`, `cover_thumbnail`, and `thumbnail`.
+- Required configuration: pass flags explicitly or set
+  `DECK_LIBRARY_BASE_TOKEN`, `DECK_LIBRARY_DECKS_TABLE`,
+  `DECK_LIBRARY_SLIDES_TABLE`, and optionally `DECK_LIBRARY_LARK_PROFILE`.
+
+If `feishu-deck-h5` is missing, this Skill may still document/archive/search
+metadata, but it must not claim it can render or validate final H5 deliverables.
+
 ## When To Use
 
 Use when the user asks to:

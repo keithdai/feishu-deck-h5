@@ -68,6 +68,17 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("expressive", text)
         self.assertIn("prefers-reduced-motion", text)
 
+    def test_skill_declares_standalone_export_dependencies(self):
+        text = SKILL.read_text(encoding="utf-8")
+
+        self.assertIn("Standalone Export Dependencies", text)
+        self.assertIn("feishu-deck-h5", text)
+        self.assertIn("lark-cli", text)
+        self.assertIn("DECK_LIBRARY_BASE_TOKEN", text)
+        self.assertIn("DECK_LIBRARY_DECKS_TABLE", text)
+        self.assertIn("DECK_LIBRARY_SLIDES_TABLE", text)
+        self.assertIn("base-schema.md", text)
+
 
 if __name__ == "__main__":
     unittest.main()
