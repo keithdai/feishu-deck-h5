@@ -242,6 +242,9 @@ class ArchivePlanTests(unittest.TestCase):
         self.assertEqual(records[0]["quality_tier"], "draft")
         self.assertIn("截图", records[0]["fidelity_notes"])
         self.assertIn("native H5", records[0]["fidelity_notes"])
+        self.assertEqual(records[0]["has_motion"], False)
+        self.assertEqual(records[0]["motion_tier"], "none")
+        self.assertIn("默认不加动效", records[0]["motion_notes"])
 
     def test_slide_records_mark_normal_raw_html_pages_as_native_h5(self):
         archive = load_module("archive")
@@ -264,6 +267,40 @@ class ArchivePlanTests(unittest.TestCase):
         self.assertEqual(records[0]["material_type"], "native_h5")
         self.assertEqual(records[0]["quality_tier"], "delivery")
         self.assertIn("真实 HTML/CSS", records[0]["fidelity_notes"])
+        self.assertEqual(records[0]["has_motion"], False)
+        self.assertEqual(records[0]["motion_tier"], "none")
+        self.assertIn("当前无 bespoke motion", records[0]["motion_notes"])
+
+    def test_slide_records_mark_animated_native_h5_motion_metadata(self):
+        archive = load_module("archive")
+        deck = {
+            "slides": [
+                {
+                    "key": "native-motion",
+                    "layout": "raw",
+                    "data": {
+                        "title": "动效素材",
+                        "html": '<section><h1 class="reveal">动效素材</h1></section>',
+                    },
+                    "custom_css": (
+                        '@media (prefers-reduced-motion: no-preference){'
+                        '.slide-frame.is-current .slide[data-slide-key="native-motion"] .reveal{'
+                        'animation:native-motion-rise .6s both;'
+                        '}'
+                        '}'
+                        '@keyframes native-motion-rise{from{opacity:0}to{opacity:1}}'
+                    ),
+                }
+            ]
+        }
+
+        records = archive.slide_records("deck_demo", deck, Path("/tmp/demo/output"))
+
+        self.assertEqual(records[0]["material_type"], "native_h5")
+        self.assertEqual(records[0]["quality_tier"], "delivery")
+        self.assertEqual(records[0]["has_motion"], True)
+        self.assertEqual(records[0]["motion_tier"], "subtle")
+        self.assertIn("CSS-only 动效", records[0]["motion_notes"])
 
     def test_upload_deck_artifacts_uploads_cloud_reusable_files(self):
         archive = load_module("archive")

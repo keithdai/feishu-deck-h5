@@ -126,6 +126,28 @@ def classify_material_quality(slide: dict[str, object]) -> dict[str, str]:
     }
 
 
+def classify_motion_quality(slide: dict[str, object], quality_fields: dict[str, str]) -> dict[str, object]:
+    css = slide.get("custom_css") if isinstance(slide.get("custom_css"), str) else ""
+    has_motion = "animation:" in css or "@keyframes" in css
+    if quality_fields.get("material_type") != "native_h5" or quality_fields.get("quality_tier") != "delivery":
+        return {
+            "has_motion": False,
+            "motion_tier": "none",
+            "motion_notes": "截图或非交付素材默认不加动效；如需高级动效，先升级为 native H5。",
+        }
+    if has_motion:
+        return {
+            "has_motion": True,
+            "motion_tier": "subtle",
+            "motion_notes": "native H5 素材包含 CSS-only 动效，适合高质量 H5 交付。",
+        }
+    return {
+        "has_motion": False,
+        "motion_tier": "none",
+        "motion_notes": "native H5 素材当前无 bespoke motion；可在高质量交付前添加 subtle CSS motion。",
+    }
+
+
 def artifact_files(output_dir: Path) -> dict[str, str | None]:
     assets_zip = output_dir / "assets.zip"
     has_asset_bundle = any((output_dir / name).exists() for name in ("assets", "pages"))
@@ -172,6 +194,7 @@ def slide_records(deck_id: str, deck: dict[str, object], output_dir: Path) -> li
             page_description=page_description,
         )
         quality_fields = classify_material_quality(slide)
+        motion_fields = classify_motion_quality(slide, quality_fields)
         records.append(
             {
                 "material_id": f"{deck_id}:{code}",
@@ -188,6 +211,7 @@ def slide_records(deck_id: str, deck: dict[str, object], output_dir: Path) -> li
                 "visual_summary": slide.get("layout", "raw"),
                 **user_fields,
                 **quality_fields,
+                **motion_fields,
                 "thumbnail": str(thumbnail) if thumbnail else None,
                 "slide_payload_json": json.dumps(slide, ensure_ascii=False, separators=(",", ":")),
                 "source_artifact_ref": f"base://deck/{deck_id}",
