@@ -81,6 +81,27 @@ If the user asks for high-quality client delivery and selected materials include
 `replica_screenshot`, propose a native H5 upgrade before publishing. Do not present
 a screenshot replica deck as if it has the same fidelity as a native H5 deck.
 
+## Motion Quality
+
+Motion quality is part of native H5 delivery quality, not a cosmetic afterthought:
+
+- `has_motion=true` means the material contains validated CSS-only bespoke motion
+  in `slide.custom_css`.
+- `motion_tier=none` means no bespoke motion. This is the default for
+  `replica_screenshot`, `draft`, iframe/live demo, or unsafe pages.
+- `motion_tier=subtle` is the default target for `native_h5` + `delivery`
+  materials: business-safe title focus, card stagger reveal, restrained pulse, or
+  ambient decor.
+- `motion_tier=expressive` is opt-in only when the user asks for stronger
+  technology feel.
+- `motion_notes` must explain what moves or why motion was excluded.
+
+Motion must be CSS-only, scoped to `.slide-frame.is-current
+.slide[data-slide-key="<key>"]`, wrapped in `@media (prefers-reduced-motion:
+no-preference)`, and stored in `slide.custom_css`. Never add per-slide
+`<script>` for motion. If a page is `replica_screenshot`, do not add default
+motion; propose a native H5 upgrade first.
+
 ## Base View Layout
 
 User-facing fields first. Materials views should put human browsing fields before
@@ -88,7 +109,7 @@ technical fields so the Base is easy to scan:
 
 - Front: `thumbnail`, `material_code`, `素材名称`, `素材描述`, `适用场景`, `页面价值`, `视觉类型`, `关键词`.
 - Search support: `page_description`, `title`, `scene`, `tags`, `visual_summary`, `content_summary`.
-- Middle: `status`, `material_type`, `quality_tier`, `material_id`, `slide_index`, `screen_label`, `layout`, `slide_key`.
+- Middle: `status`, `material_type`, `quality_tier`, `has_motion`, `motion_tier`, `material_id`, `slide_index`, `screen_label`, `layout`, `slide_key`.
 - Technical fields last: `deck_id`, `source_artifact_ref`, `source`, `theme`, `accent`, `content_hash`, `slide_payload_json`.
 
 Gallery views should use `thumbnail` as the card cover and show `material_code`
@@ -111,8 +132,8 @@ python3 skills/deck-library/assets/archive.py <run-output-dir> --write \
 
 Search by need using the agent's own strategy, then present `material_code`,
 `material_id`, `page_description`, `material_type`, `quality_tier`, and
-thumbnail/Base gallery context so the user can pick visually. `search.py` is only
-one helper, not the search strategy:
+`motion_tier`, plus thumbnail/Base gallery context so the user can pick visually.
+`search.py` is only one helper, not the search strategy:
 
 ```bash
 python3 skills/deck-library/assets/search.py "客户反馈 总结页" \

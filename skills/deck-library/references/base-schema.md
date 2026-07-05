@@ -56,6 +56,9 @@ search and composition remain reliable.
 | `material_type` | Single select | Yes | `replica_screenshot` for image-only replicas, `native_h5` for real H5 slide content. |
 | `quality_tier` | Single select | Yes | `draft`, `standard`, or `delivery`; screenshot replicas start as `draft`. |
 | `fidelity_notes` | Long text | No | User-facing explanation of reuse limits and whether native H5 upgrade is recommended. |
+| `has_motion` | Checkbox | No | True when the material has validated CSS-only bespoke motion in `slide.custom_css`. |
+| `motion_tier` | Single select | No | `none`, `subtle`, or `expressive`; `subtle` is the default target for native H5 delivery materials. |
+| `motion_notes` | Long text | No | User-facing explanation of what moves or why motion was excluded. |
 | `theme` | Text | No | Palette/style summary inherited or overridden. |
 | `accent` | Text | No | Slide accent color if known. |
 | `thumbnail` | Attachment | No | Per-slide screenshot. |
@@ -90,5 +93,7 @@ search and composition remain reliable.
   fields, and reusable fields, not local provenance paths.
 - Search and compose responses should expose `material_type`, `quality_tier`, and
   `fidelity_notes` so screenshot replica materials are not mistaken for native H5.
+- Search and compose responses should also expose `has_motion`, `motion_tier`, and
+  `motion_notes` so animated native H5 materials are distinguishable from static ones.
 - Compose may accept local paths for development fallback, but team reuse should
   download cloud attachments from the deck record referenced by `source_artifact_ref`.

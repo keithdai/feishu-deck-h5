@@ -58,6 +58,16 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("native_h5", text)
         self.assertIn("native H5", text)
 
+    def test_skill_requires_motion_quality_disclosure(self):
+        text = SKILL.read_text(encoding="utf-8")
+
+        self.assertIn("has_motion", text)
+        self.assertIn("motion_tier", text)
+        self.assertIn("motion_notes", text)
+        self.assertIn("subtle", text)
+        self.assertIn("expressive", text)
+        self.assertIn("prefers-reduced-motion", text)
+
 
 if __name__ == "__main__":
     unittest.main()
