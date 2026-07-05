@@ -91,6 +91,24 @@ class ComposeMaterialsTests(unittest.TestCase):
 
         self.assertEqual(compose_materials.quality_warnings(records), [])
 
+    def test_quality_warnings_accept_base_select_list_values(self):
+        compose_materials = load_module("compose_materials")
+        records = [
+            {
+                "material_id": "deck_demo:M001",
+                "material_code": "M001",
+                "material_type": ["replica_screenshot"],
+                "quality_tier": ["draft"],
+            }
+        ]
+
+        summary = compose_materials.quality_summary(records)
+        warnings = compose_materials.quality_warnings(records)
+
+        self.assertEqual(summary["by_material_type"]["replica_screenshot"], 1)
+        self.assertEqual(summary["by_quality_tier"]["draft"], 1)
+        self.assertTrue(any("M001" in warning for warning in warnings))
+
     def test_write_deck_creates_deck_json(self):
         compose_materials = load_module("compose_materials")
         deck = {"version": "1.0", "deck": {"title": "Demo"}, "slides": []}

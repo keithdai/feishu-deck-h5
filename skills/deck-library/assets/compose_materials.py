@@ -74,12 +74,22 @@ def fetch_material_records(config: lark_base.BaseConfig, identifiers: list[str])
     return records
 
 
+def scalar_cell(value: Any, default: str = "unknown") -> str:
+    if isinstance(value, list):
+        if not value:
+            return default
+        return str(value[0])
+    if value is None or value == "":
+        return default
+    return str(value)
+
+
 def quality_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
     by_material_type: dict[str, int] = {}
     by_quality_tier: dict[str, int] = {}
     for record in records:
-        material_type = str(record.get("material_type") or "unknown")
-        quality_tier = str(record.get("quality_tier") or "unknown")
+        material_type = scalar_cell(record.get("material_type"))
+        quality_tier = scalar_cell(record.get("quality_tier"))
         by_material_type[material_type] = by_material_type.get(material_type, 0) + 1
         by_quality_tier[quality_tier] = by_quality_tier.get(quality_tier, 0) + 1
     return {
@@ -93,7 +103,7 @@ def quality_warnings(records: list[dict[str, Any]]) -> list[str]:
     replica_codes = [
         str(record.get("material_code") or record.get("material_id") or "<unknown>")
         for record in records
-        if record.get("material_type") == "replica_screenshot"
+        if scalar_cell(record.get("material_type")) == "replica_screenshot"
     ]
     if not replica_codes:
         return []
