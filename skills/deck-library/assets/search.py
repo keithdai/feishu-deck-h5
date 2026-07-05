@@ -30,11 +30,11 @@ SELECT_FIELDS = [
 
 
 def build_filter_json(args: argparse.Namespace) -> dict[str, object] | None:
-    conditions: list[list[object]] = []
+    conditions: list[object] = []
     if args.tag:
-        conditions.append(["tags", "intersects", args.tag])
+        conditions.extend([["tags", "intersects", tag] for tag in args.tag])
     if args.layout:
-        conditions.append(["layout", "intersects", args.layout])
+        conditions.extend([["layout", "==", layout] for layout in args.layout])
     if args.scene:
         conditions.append(["scene", "==", args.scene])
     if args.source:

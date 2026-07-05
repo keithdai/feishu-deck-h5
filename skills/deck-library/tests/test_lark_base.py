@@ -113,7 +113,7 @@ class LarkBaseTests(unittest.TestCase):
 
         self.assertIsNone(lark_base.extract_single_record_id(result))
 
-    def test_find_record_command_filters_by_business_key_with_json_body(self):
+    def test_find_record_command_filters_by_business_key_with_record_list_filter(self):
         lark_base = load_module("lark_base")
         config = lark_base.BaseConfig(
             base_token="base123",
@@ -130,15 +130,14 @@ class LarkBaseTests(unittest.TestCase):
             key_value="deck_1",
         )
 
+        self.assertIn("+record-list", command)
         self.assertNotIn("--keyword", command)
-        body = json.loads(command[command.index("--json") + 1])
-        self.assertEqual(body["keyword"], "deck_1")
-        self.assertEqual(body["search_fields"], ["deck_id"])
-        self.assertEqual(body["filter"], {"logic": "and", "conditions": [["deck_id", "==", "deck_1"]]})
-        self.assertEqual(body["select_fields"], ["deck_id"])
-        self.assertEqual(body["limit"], 2)
+        body = json.loads(command[command.index("--filter-json") + 1])
+        self.assertEqual(body, {"logic": "and", "conditions": [["deck_id", "==", "deck_1"]]})
+        self.assertEqual(command[command.index("--field-id") + 1], "deck_id")
+        self.assertEqual(command[command.index("--limit") + 1], "2")
 
-    def test_find_record_command_truncates_keyword_for_long_business_key(self):
+    def test_find_record_command_uses_full_business_key_in_filter(self):
         lark_base = load_module("lark_base")
         config = lark_base.BaseConfig(
             base_token="base123",
@@ -156,9 +155,8 @@ class LarkBaseTests(unittest.TestCase):
             key_value=long_value,
         )
 
-        body = json.loads(command[command.index("--json") + 1])
-        self.assertLessEqual(len(body["keyword"]), 50)
-        self.assertEqual(body["filter"]["conditions"], [["slide_id", "==", long_value]])
+        body = json.loads(command[command.index("--filter-json") + 1])
+        self.assertEqual(body["conditions"], [["slide_id", "==", long_value]])
 
     def test_material_lookup_command_matches_material_id_or_code(self):
         lark_base = load_module("lark_base")
@@ -177,18 +175,54 @@ class LarkBaseTests(unittest.TestCase):
             select_fields=["material_id", "material_code", "slide_payload_json"],
         )
 
-        body = json.loads(command[command.index("--json") + 1])
-        self.assertEqual(body["keyword"], "M001")
-        self.assertEqual(body["search_fields"], ["material_id", "material_code"])
+        self.assertIn("+record-list", command)
+        body = json.loads(command[command.index("--filter-json") + 1])
         self.assertEqual(
-            body["filter"],
+            body,
             {
                 "logic": "or",
                 "conditions": [["material_id", "==", "M001"], ["material_code", "==", "M001"]],
             },
         )
-        self.assertEqual(body["select_fields"], ["material_id", "material_code", "slide_payload_json"])
-        self.assertEqual(body["limit"], 2)
+        projected_fields = [command[index + 1] for index, value in enumerate(command) if value == "--field-id"]
+        self.assertEqual(projected_fields, ["material_id", "material_code", "slide_payload_json"])
+        self.assertEqual(command[command.index("--limit") + 1], "2")
+
+    def test_list_materials_role_filter_uses_text_or_conditions(self):
+        lark_base = load_module("lark_base")
+        calls = []
+        config = lark_base.BaseConfig(
+            base_token="base123",
+            decks_table="tblDecks",
+            slides_table="tblMaterials",
+            profile="bytedance",
+            identity="user",
+        )
+
+        def fake_run_json(command):
+            calls.append(command)
+            return {"ok": True}
+
+        lark_base.run_json = fake_run_json
+        lark_base.list_materials(
+            config,
+            deck_id="deck_demo",
+            page_roles=["封面", "案例"],
+            select_fields=["material_id", "page_role"],
+            limit=10,
+        )
+
+        body = json.loads(calls[0][calls[0].index("--filter-json") + 1])
+        self.assertEqual(
+            body,
+            {
+                "logic": "and",
+                "conditions": [
+                    ["deck_id", "==", "deck_demo"],
+                    {"logic": "or", "conditions": [["page_role", "==", "封面"], ["page_role", "==", "案例"]]},
+                ],
+            },
+        )
 
     def test_upload_attachment_command_appends_file_to_attachment_field(self):
         lark_base = load_module("lark_base")
@@ -263,6 +297,49 @@ class LarkBaseTests(unittest.TestCase):
         self.assertEqual(command[command.index("--output") + 1], "downloads/assets.zip")
         self.assertIn("--overwrite", command)
 
+    def test_field_and_view_commands_support_schema_migration(self):
+        lark_base = load_module("lark_base")
+        config = lark_base.BaseConfig(
+            base_token="base123",
+            decks_table="tblDecks",
+            slides_table="tblMaterials",
+            profile="bytedance",
+            identity="user",
+        )
+
+        field_command = lark_base.build_field_create_command(
+            config=config,
+            table_id="tblMaterials",
+            field={"name": "复用状态", "type": "select", "multiple": False},
+            dry_run=True,
+        )
+        visible_command = lark_base.build_view_set_visible_fields_command(
+            config=config,
+            table_id="tblMaterials",
+            view_id="vewMain",
+            visible_fields=["material_id", "thumbnail", "素材名称"],
+        )
+        filter_command = lark_base.build_view_set_filter_command(
+            config=config,
+            table_id="tblDecks",
+            view_id="vewReady",
+            filter_json={"logic": "and", "conditions": [["access_status", "intersects", ["ready"]]]},
+        )
+
+        self.assertIn("+field-create", field_command)
+        self.assertEqual(json.loads(field_command[field_command.index("--json") + 1])["name"], "复用状态")
+        self.assertIn("--dry-run", field_command)
+        self.assertIn("+view-set-visible-fields", visible_command)
+        self.assertEqual(
+            json.loads(visible_command[visible_command.index("--json") + 1]),
+            {"visible_fields": ["material_id", "thumbnail", "素材名称"]},
+        )
+        self.assertIn("+view-set-filter", filter_command)
+        self.assertEqual(
+            json.loads(filter_command[filter_command.index("--json") + 1])["conditions"],
+            [["access_status", "intersects", ["ready"]]],
+        )
+
     def test_extract_attachment_tokens_from_record_get_result(self):
         lark_base = load_module("lark_base")
         result = {
@@ -298,6 +375,39 @@ class LarkBaseTests(unittest.TestCase):
         }
 
         self.assertEqual(lark_base.extract_upsert_record_id(result), "rec4")
+
+    def test_replace_attachment_uploads_new_file_before_removing_old_tokens(self):
+        lark_base = load_module("lark_base")
+        calls = []
+        config = lark_base.BaseConfig(base_token="base", decks_table="tblDecks", slides_table="tblSlides")
+
+        def fake_get_tokens(config, *, table_id, record_id, field_id):
+            calls.append("get")
+            return ["old-token"]
+
+        def fake_upload(config, *, table_id, record_id, field_id, files):
+            calls.append("upload")
+            return {"ok": True}
+
+        def fake_remove(config, *, table_id, record_id, field_id, file_tokens):
+            calls.append("remove")
+            self.assertEqual(file_tokens, ["old-token"])
+            return {"ok": True}
+
+        lark_base.get_attachment_tokens = fake_get_tokens
+        lark_base.upload_attachment = fake_upload
+        lark_base.remove_attachment = fake_remove
+
+        result = lark_base.replace_attachment(
+            config,
+            table_id="tblDecks",
+            record_id="rec1",
+            field_id="deck_json",
+            files=["runs/demo/output/deck.json"],
+        )
+
+        self.assertEqual(calls, ["get", "upload", "remove"])
+        self.assertEqual(result["removed"], 1)
 
 
 if __name__ == "__main__":

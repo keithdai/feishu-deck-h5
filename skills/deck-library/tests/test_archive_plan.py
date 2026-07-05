@@ -44,6 +44,15 @@ class ArchivePlanTests(unittest.TestCase):
 
         self.assertEqual(plan["deck_record"]["status"], "archived")
         self.assertEqual(plan["deck_record"]["validation_status"], "unknown")
+        self.assertEqual(plan["deck_record"]["access_status"], "draft")
+        self.assertEqual(plan["deck_record"]["link_health"], "unknown")
+        self.assertEqual(plan["deck_record"]["quality_tier"], "draft")
+        self.assertEqual(plan["deck_record"]["reuse_scope"], "页面拆用")
+        self.assertEqual(plan["deck_record"]["title"], "Demo Deck")
+        self.assertEqual(plan["deck_record"]["中文名称"], "Demo Deck")
+        self.assertIn("完整 H5 deck", plan["deck_record"]["中文描述"])
+        self.assertIn("汇报材料", plan["deck_record"]["适用场景"])
+        self.assertIn("下钻到 Materials", plan["deck_record"]["推荐用法"])
         self.assertEqual(plan["slide_records"][0]["status"], "active")
         self.assertEqual(plan["slide_records"][0]["content_summary"], "Intro")
 
@@ -73,6 +82,33 @@ class ArchivePlanTests(unittest.TestCase):
 
         self.assertEqual(plan["deck_record"]["cover_thumbnail"], str(pages / "page-01.jpg"))
         self.assertEqual(plan["slide_records"][0]["thumbnail"], str(pages / "page-01.jpg"))
+
+    def test_archive_plan_can_limit_slides_for_smoke_tests(self):
+        archive = load_module("archive")
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            (output / "deck.json").write_text(
+                json.dumps(
+                    {
+                        "version": "1.0",
+                        "deck": {"title": "Demo Deck"},
+                        "slides": [
+                            {"key": "intro", "layout": "raw", "data": {"title": "Intro", "html": "<div></div>"}},
+                            {"key": "body", "layout": "raw", "data": {"title": "Body", "html": "<div></div>"}},
+                            {"key": "end", "layout": "raw", "data": {"title": "End", "html": "<div></div>"}},
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (output / "index.html").write_text("<html></html>", encoding="utf-8")
+
+            plan = archive.build_archive_plan(output, "deck_demo", limit_slides=2)
+
+        self.assertEqual(plan["deck_record"]["slide_count"], 2)
+        self.assertEqual([record["material_code"] for record in plan["slide_records"]], ["M001", "M002"])
+        self.assertEqual(plan["planned_writes"]["feishu_base_slides"], 2)
 
     def test_archive_plan_marks_deck_artifacts_as_attachment_sources(self):
         archive = load_module("archive")

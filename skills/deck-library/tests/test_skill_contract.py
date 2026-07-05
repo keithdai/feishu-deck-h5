@@ -79,6 +79,15 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("DECK_LIBRARY_SLIDES_TABLE", text)
         self.assertIn("base-schema.md", text)
 
+    def test_skill_declares_decks_as_complete_deck_registry(self):
+        text = SKILL.read_text(encoding="utf-8")
+
+        self.assertIn("Complete Deck Registry", text)
+        self.assertIn("Decks is the complete deck library entry", text)
+        self.assertIn("online_url", text)
+        self.assertIn("Miaoda is optional", text)
+        self.assertIn("drill down from Decks to Materials", text)
+
 
 if __name__ == "__main__":
     unittest.main()

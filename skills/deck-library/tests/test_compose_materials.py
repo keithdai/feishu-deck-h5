@@ -186,6 +186,40 @@ class ComposeMaterialsTests(unittest.TestCase):
 
         self.assertEqual(compose_materials.deck_ids_from_material_records(records), ["deck_alpha", "deck_beta"])
 
+    def test_fetch_material_records_by_deck_roles_queries_source_order(self):
+        compose_materials = load_module("compose_materials")
+        calls = []
+
+        class FakeBase:
+            slides_table = "tblMaterials"
+
+        def fake_list_materials(config, *, deck_id, page_roles, select_fields, limit):
+            calls.append((deck_id, page_roles, select_fields, limit))
+            return {
+                "data": {
+                    "fields": ["material_id", "material_code", "slide_index"],
+                    "data": [
+                        ["deck_demo:M001", "M001", 1],
+                        ["deck_demo:M004", "M004", 4],
+                    ],
+                }
+            }
+
+        compose_materials.lark_base.list_materials = fake_list_materials
+
+        records = compose_materials.fetch_material_records_by_deck_roles(
+            FakeBase(),
+            deck_id="deck_demo",
+            page_roles=["封面", "案例"],
+            limit=20,
+        )
+
+        self.assertEqual([record["material_code"] for record in records], ["M001", "M004"])
+        self.assertEqual(calls[0][0], "deck_demo")
+        self.assertEqual(calls[0][1], ["封面", "案例"])
+        self.assertIn("page_role", calls[0][2])
+        self.assertEqual(calls[0][3], 20)
+
     def test_extract_asset_zip_safely_restores_pages(self):
         compose_materials = load_module("compose_materials")
         with tempfile.TemporaryDirectory() as tmp:

@@ -99,6 +99,36 @@ def chinese_material_fields(
     }
 
 
+def deck_title(deck: dict[str, object], output_dir: Path) -> str:
+    meta = deck.get("deck") if isinstance(deck.get("deck"), dict) else {}
+    title = meta.get("title") if isinstance(meta, dict) else None
+    if isinstance(title, str) and title.strip():
+        return title.strip()
+    legacy_title = deck.get("title")
+    if isinstance(legacy_title, str) and legacy_title.strip():
+        return legacy_title.strip()
+    return output_dir.parent.name
+
+
+def chinese_deck_fields(*, title: str, records: list[dict[str, object]]) -> dict[str, str]:
+    summaries = [
+        str(record.get("素材名称") or record.get("title") or "").strip()
+        for record in records[:3]
+        if str(record.get("素材名称") or record.get("title") or "").strip()
+    ]
+    description = f"完整 H5 deck，共 {len(records)} 页。"
+    if summaries:
+        description += " 主要页面：" + "、".join(summaries) + "。"
+    return {
+        "中文名称": title,
+        "中文描述": description,
+        "适用场景": "汇报材料、客户提案、素材复用",
+        "推荐用法": "可作为完整 deck 浏览，也可下钻到 Materials 按页复用。",
+        "复用范围": "完整复用、页面拆用",
+        "链接状态": "待补充线上链接",
+    }
+
+
 def is_full_bleed_image_replica(slide: dict[str, object]) -> bool:
     data = slide.get("data") if isinstance(slide.get("data"), dict) else {}
     html_value = data.get("html") if isinstance(data, dict) else ""
@@ -221,7 +251,7 @@ def slide_records(deck_id: str, deck: dict[str, object], output_dir: Path) -> li
     return records
 
 
-def build_archive_plan(output_dir: Path, deck_id: str | None) -> dict[str, object]:
+def build_archive_plan(output_dir: Path, deck_id: str | None, *, limit_slides: int | None = None) -> dict[str, object]:
     deck_json = output_dir / "deck.json"
     index_html = output_dir / "index.html"
     if not deck_json.exists():
@@ -231,15 +261,22 @@ def build_archive_plan(output_dir: Path, deck_id: str | None) -> dict[str, objec
 
     deck = load_deck(deck_json)
     resolved_deck_id = deck_id or f"deck_{file_sha256(deck_json)[:12]}"
+    if limit_slides is not None:
+        if limit_slides < 1:
+            raise ValueError("limit_slides must be greater than 0")
+        deck = dict(deck)
+        deck["slides"] = deck["slides"][:limit_slides]
     records = slide_records(resolved_deck_id, deck, output_dir)
     cover_thumbnail = records[0].get("thumbnail") if records else None
+    title = deck_title(deck, output_dir)
 
     return {
         "mode": "plan",
         "operation": "archive",
         "deck_record": {
             "deck_id": resolved_deck_id,
-            "title": deck.get("title") or output_dir.parent.name,
+            "title": title,
+            **chinese_deck_fields(title=title, records=records),
             "slide_count": len(records),
             "content_hash": file_sha256(deck_json),
             "deck_json": str(deck_json),
@@ -248,6 +285,10 @@ def build_archive_plan(output_dir: Path, deck_id: str | None) -> dict[str, objec
             "source_run_path": str(output_dir),
             "source": "feishu-deck-h5",
             "validation_status": "unknown",
+            "access_status": "draft",
+            "link_health": "unknown",
+            "quality_tier": "draft",
+            "reuse_scope": "页面拆用",
             "status": "archived",
             "version": 1,
         },
@@ -370,6 +411,7 @@ def main() -> int:
     parser.add_argument("--deck-id", help="Stable deck ID to use for the archive record.")
     parser.add_argument("--dry-run", action="store_true", help="Print the plan without writing Base/Drive.")
     parser.add_argument("--write", action="store_true", help="Write deck and slide records to Feishu Base.")
+    parser.add_argument("--limit-slides", type=int, help="Archive only the first N slides for smoke tests.")
     parser.add_argument("--base-token", help="Feishu Base token. Defaults to DECK_LIBRARY_BASE_TOKEN.")
     parser.add_argument("--decks-table", help="Decks table ID/name. Defaults to DECK_LIBRARY_DECKS_TABLE.")
     parser.add_argument("--materials-table", "--slides-table", dest="slides_table", help="Materials table ID/name. Defaults to DECK_LIBRARY_SLIDES_TABLE.")
@@ -382,7 +424,7 @@ def main() -> int:
         return 2
 
     try:
-        plan = build_archive_plan(args.output_dir.resolve(), args.deck_id)
+        plan = build_archive_plan(args.output_dir.resolve(), args.deck_id, limit_slides=args.limit_slides)
     except Exception as exc:
         print(f"archive.py: {exc}", file=sys.stderr)
         return 1

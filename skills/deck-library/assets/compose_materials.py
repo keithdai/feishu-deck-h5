@@ -21,10 +21,12 @@ MATERIAL_SELECT_FIELDS = [
     "material_id",
     "material_code",
     "slide_key",
+    "slide_index",
     "title",
     "page_description",
     "slide_payload_json",
     "source_artifact_ref",
+    "page_role",
     "material_type",
     "quality_tier",
     "fidelity_notes",
@@ -75,6 +77,24 @@ def fetch_material_records(config: lark_base.BaseConfig, identifiers: list[str])
         )
         records.append(first_material(result, identifier))
     return records
+
+
+def fetch_material_records_by_deck_roles(
+    config: lark_base.BaseConfig,
+    *,
+    deck_id: str,
+    page_roles: list[str],
+    limit: int,
+) -> list[dict[str, Any]]:
+    result = lark_base.list_materials(
+        config,
+        deck_id=deck_id,
+        page_roles=page_roles,
+        select_fields=MATERIAL_SELECT_FIELDS,
+        limit=limit,
+    )
+    rows = extract_rows(result)
+    return sorted(rows, key=lambda row: int(row.get("slide_index") or 0))
 
 
 def scalar_cell(value: Any, default: str = "unknown") -> str:
@@ -289,11 +309,14 @@ def render_deck(deck_path: Path, output_dir: Path, renderer_root: Path) -> dict[
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Compose a deck from material IDs/codes stored in Base.")
-    parser.add_argument("materials", nargs="+", help="Material IDs or human-facing codes, e.g. M001 or deck_id:M001.")
+    parser.add_argument("materials", nargs="*", help="Material IDs or human-facing codes, e.g. M001 or deck_id:M001.")
     parser.add_argument("--title", default="Composed Material Deck", help="Title for the generated deck.")
     parser.add_argument("--output-dir", type=Path, default=Path("runs/deck-library-material-compose/output"))
     parser.add_argument("--asset-root", action="append", type=Path, default=[], help="Local extracted artifact root containing assets/ or pages/. Repeatable.")
     parser.add_argument("--renderer-root", type=Path, default=default_renderer_root())
+    parser.add_argument("--deck-id", help="Select materials from this complete deck instead of explicit material IDs.")
+    parser.add_argument("--page-role", action="append", default=[], help="When --deck-id is set, select matching page_role values. Repeatable.")
+    parser.add_argument("--limit", type=int, default=20, help="Maximum role-selected materials.")
     parser.add_argument("--write", action="store_true", help="Write output deck.json.")
     parser.add_argument("--no-render", action="store_true", help="With --write, skip HTML rendering.")
     parser.add_argument("--base-token", help="Feishu Base token. Defaults to DECK_LIBRARY_BASE_TOKEN.")
@@ -316,8 +339,20 @@ def main() -> int:
         print("compose_materials.py: " + "; ".join(errors), file=sys.stderr)
         return 2
 
+    if not args.materials and not args.deck_id:
+        print("compose_materials.py: provide material IDs/codes or --deck-id", file=sys.stderr)
+        return 2
+
     try:
-        records = fetch_material_records(config, args.materials)
+        if args.deck_id:
+            records = fetch_material_records_by_deck_roles(
+                config,
+                deck_id=args.deck_id,
+                page_roles=args.page_role,
+                limit=args.limit,
+            )
+        else:
+            records = fetch_material_records(config, args.materials)
         deck = build_deck_from_material_records(records, args.title)
     except Exception as exc:
         print(f"compose_materials.py: {exc}", file=sys.stderr)
@@ -331,6 +366,8 @@ def main() -> int:
                     "operation": "compose_materials",
                     "title": args.title,
                     "materials": args.materials,
+                    "deck_id": args.deck_id,
+                    "page_roles": args.page_role,
                     "resolved_materials": [
                         {
                             "material_id": record.get("material_id"),
@@ -379,6 +416,8 @@ def main() -> int:
                 "html": str(args.output_dir / "index.html") if render_result != "skipped" else None,
                 "slide_count": len(deck["slides"]),
                 "materials": args.materials,
+                "deck_id": args.deck_id,
+                "page_roles": args.page_role,
                 "quality_summary": quality_summary(records),
                 "quality_warnings": quality_warnings(records),
                 "motion_summary": motion_summary(records),

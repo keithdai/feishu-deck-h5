@@ -1,14 +1,17 @@
 ---
 name: deck-library
-description: Use when a user wants to manage reusable Feishu deck page materials, search or visually pick slide/page素材 from a Base library, compose a new presentation from material numbers, or hand off/publish an HTML deck built from stored materials.
+description: Use when a user wants to manage complete online Feishu deck records, reusable deck page materials, search or visually pick deck/page素材 from a Base library, compose a new presentation from material numbers, or hand off/publish an HTML deck built from stored materials.
 ---
 
 # deck-library
 
-`deck-library` is the agent operating mode for a Feishu Base-backed page material
-library. The main table is `Materials`: one row is one reusable page-level
-material with a human/agent identifier, searchable material_description,
-thumbnail, and the original low-level `deck.json` slide payload.
+`deck-library` is the agent operating mode for a Feishu Base-backed deck and
+page material library. `Decks` is the complete deck library entry: one row is
+one complete deck that can have an `online_url`, cover thumbnail, scenario,
+quality, reuse guidance, and reusable artifacts. `Materials` is the page-level
+library: one row is one reusable page material with a human/agent identifier,
+searchable material_description, thumbnail, and the original low-level
+`deck.json` slide payload.
 
 ## Standalone Export Dependencies
 
@@ -34,7 +37,12 @@ metadata, but it must not claim it can render or validate final H5 deliverables.
 
 Use when the user asks to:
 
+- Search complete pitch decks, H5 decks, or directly usable online materials.
+- Maintain online deck links and reuse guidance in the `Decks` table.
+- Drill down from Decks to Materials to inspect or reuse individual pages.
 - Archive generated `feishu-deck-h5` pages into a reusable material library.
+- Migrate or repair the Base schema/view setup for deck-library operations.
+- Check whether complete deck links in `Decks.online_url` are still reachable.
 - Search reusable page materials by meaning, scene, title, description, or keywords.
 - Return candidate material numbers for the user to review in Base thumbnails.
 - Compose a new HTML presentation from material numbers such as `M001 M008`.
@@ -46,7 +54,11 @@ or import after this skill has produced the composed `deck.json`/HTML handoff.
 
 ## Operating Model
 
-- `Materials` is the primary human/agent table; `Decks` is the backend artifact table.
+- `Decks` is the complete deck library entry; it replaces a required separate portal for the MVP.
+- `Materials` is the page-level material table for drill-down and composition.
+- Miaoda is optional; store Miaoda, Magic Page, Lark, or external H5 links in `Decks.online_url` when available.
+- Agents should search Decks first for complete materials, then drill down from Decks to Materials when the user wants page reuse.
+- `online_url` is the direct link for opening a complete deck.
 - `material_code` is the short human-facing selector, e.g. `M001`.
 - `material_id` is the stable selector, e.g. `deck_demo:M001`.
 - `page_description` / `material_description` is mandatory search text; do not rely on rendered HTML search.
@@ -54,6 +66,39 @@ or import after this skill has produced the composed `deck.json`/HTML handoff.
 - `slide_payload_json` is the reusable composition payload copied from `deck.json`.
 - `source_artifact_ref` points to deck artifacts, usually `base://deck/<deck_id>`.
 - `Decks.assets_zip` stores shared dependencies (`assets/` and `pages/`) for reuse.
+- `migrate_schema.py` is the repeatable setup/repair command for missing fields,
+  operational views, and human-first view ordering.
+- `check_links.py` keeps machine fields (`link_health`, `last_checked_at`) and
+  human fields (`链接状态`) in sync with actual `online_url` reachability.
+
+## Complete Deck Registry
+
+Decks is the complete deck library entry. It should be easy for a human to open
+the Base table, find a complete material, and click `online_url` without asking
+an agent to compose anything. Miaoda is optional; the table itself is the MVP
+library interface.
+
+Deck rows should expose these human-maintained fields before technical artifact
+fields:
+
+- `online_url`: direct online link to the complete deck when available.
+- `deck_type`: pitch deck, customer proposal, industry report, product intro, or review deck.
+- `scene`, `tags`, and `content_summary`: coarse retrieval and browsing context.
+- `recommended_use`: how this complete deck should be reused or referenced.
+- `reuse_scope`: `完整复用`, `页面拆用`, or `仅参考`.
+- `quality_tier`: `draft`, `standard`, or `delivery`.
+- `access_status`: `ready`, `draft`, `broken`, or `deprecated`.
+- `link_health` and `last_checked_at`: whether the online link is still usable.
+
+When a complete deck is a good fit, drill down from Decks to Materials by
+`deck_id` to review each page before composing a new deck.
+
+Operational views should be available for ongoing library maintenance:
+
+- `可直接使用`: complete decks with `access_status=ready`.
+- `待补链接`: decks with missing or failed `online_url` health.
+- `测试样本`: smoke-test entries and validation examples.
+- `Deck Covers`: gallery view using `cover_thumbnail` as the cover field.
 
 ## Material Description Contract
 
@@ -124,10 +169,17 @@ motion; propose a native H5 upgrade first.
 
 ## Base View Layout
 
+Decks views should put complete deck browsing fields before technical artifacts:
+
+- Front: `cover_thumbnail`, `中文名称`, `中文描述`, `online_url`, `适用场景`, `推荐用法`, `复用范围`, `链接状态`.
+- Quality and access: `quality_tier`, `access_status`, `link_health`, `last_checked_at`, `owner`, `status`.
+- Agent aliases: `title`, `deck_type`, `scene`, `tags`, `recommended_use`, `reuse_scope`.
+- Technical fields last: `deck_id`, `source`, `slide_count`, `content_hash`, `deck_json`, `inline_html`, `assets_zip`.
+
 User-facing fields first. Materials views should put human browsing fields before
 technical fields so the Base is easy to scan:
 
-- Front: `thumbnail`, `material_code`, `素材名称`, `素材描述`, `适用场景`, `页面价值`, `视觉类型`, `关键词`.
+- Front: `thumbnail`, `material_code`, `素材名称`, `素材描述`, `关联Deck`, `适用场景`, `页面价值`, `视觉类型`, `关键词`.
 - Search support: `page_description`, `title`, `scene`, `tags`, `visual_summary`, `content_summary`.
 - Middle: `status`, `material_type`, `quality_tier`, `has_motion`, `motion_tier`, `material_id`, `slide_index`, `screen_label`, `layout`, `slide_key`.
 - Technical fields last: `deck_id`, `source_artifact_ref`, `source`, `theme`, `accent`, `content_hash`, `slide_payload_json`.
@@ -135,6 +187,13 @@ technical fields so the Base is easy to scan:
 Gallery views should use `thumbnail` as the card cover and show `material_code`
 plus `素材名称` / `素材描述` near the top. The primary field may be forced first
 by Base; if so, keep the user-facing fields immediately after it.
+
+Materials operational views should include:
+
+- `Materials Gallery`: thumbnail-first picking view.
+- `按Deck下钻`: source-order page inspection by `deck_id`.
+- `可直接复用页面`: pages with `reuse_status=可直接复用`.
+- `代表页`: pages marked `is_representative_page=true`.
 
 ## Agent Workflow
 
@@ -147,6 +206,33 @@ Archive finished decks into reusable Materials:
 python3 skills/deck-library/assets/archive.py <run-output-dir> --write \
   --base-token <base_token> \
   --decks-table <tbl_decks> \
+  --materials-table <tbl_materials>
+```
+
+Set up or repair Base fields/views:
+
+```bash
+python3 skills/deck-library/assets/migrate_schema.py --write \
+  --base-token <base_token> \
+  --decks-table <tbl_decks> \
+  --materials-table <tbl_materials>
+```
+
+Search complete online decks first when the user wants a complete pitch deck or
+directly usable material:
+
+```bash
+python3 skills/deck-library/assets/search_decks.py "AI 客户提案 pitch deck" \
+  --access-status ready \
+  --base-token <base_token> \
+  --decks-table <tbl_decks>
+```
+
+Drill down from a selected complete deck to its page materials:
+
+```bash
+python3 skills/deck-library/assets/list_deck_materials.py deck_20260704_001 \
+  --base-token <base_token> \
   --materials-table <tbl_materials>
 ```
 
@@ -174,6 +260,49 @@ python3 skills/deck-library/assets/compose_materials.py M001 M008 M012 \
   --decks-table <tbl_decks> \
   --materials-table <tbl_materials> \
   --output-dir runs/composed/output
+```
+
+Compose by complete deck and page role when the user asks for story-slot based
+reuse instead of explicit material codes:
+
+```bash
+python3 skills/deck-library/assets/compose_materials.py \
+  --deck-id deck_20260704_001 \
+  --page-role 封面 --page-role 案例 --page-role 收尾 \
+  --title "组合后的客户提案" \
+  --write \
+  --base-token <base_token> \
+  --decks-table <tbl_decks> \
+  --materials-table <tbl_materials>
+```
+
+Check complete deck online links:
+
+```bash
+python3 skills/deck-library/assets/check_links.py --write \
+  --base-token <base_token> \
+  --decks-table <tbl_decks>
+```
+
+Adjust only safe Base metadata fields. To change real content, edit with
+`feishu-deck-h5`, validate, and archive again:
+
+```bash
+python3 skills/deck-library/assets/update_deck_metadata.py deck_20260704_001 \
+  --set online_url=https://example.com/deck \
+  --set access_status=ready \
+  --write \
+  --base-token <base_token> \
+  --decks-table <tbl_decks>
+```
+
+```bash
+python3 skills/deck-library/assets/update_material_metadata.py deck_20260704_001:M001 \
+  --set reuse_status=可直接复用 \
+  --set edit_notes=可替换客户名称后复用 \
+  --write \
+  --base-token <base_token> \
+  --materials-table <tbl_materials>
 ```
 
 ## Delivery And Publishing

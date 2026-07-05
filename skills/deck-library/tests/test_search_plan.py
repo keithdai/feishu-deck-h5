@@ -1,4 +1,5 @@
 import importlib.util
+import argparse
 import sys
 import unittest
 from pathlib import Path
@@ -32,6 +33,24 @@ class SearchPlanTests(unittest.TestCase):
         self.assertIn("thumbnail", search.SELECT_FIELDS)
         self.assertIn("slide_payload_json", search.SELECT_FIELDS)
 
+    def test_search_filters_match_text_schema(self):
+        search = load_module("search")
+        args = argparse.Namespace(tag=["AI", "客户"], layout=["raw"], scene="客户提案", source="feishu-deck-h5", status="active")
+
+        self.assertEqual(
+            search.build_filter_json(args),
+            {
+                "logic": "and",
+                "conditions": [
+                    ["tags", "intersects", "AI"],
+                    ["tags", "intersects", "客户"],
+                    ["layout", "==", "raw"],
+                    ["scene", "==", "客户提案"],
+                    ["source", "==", "feishu-deck-h5"],
+                    ["status", "==", "active"],
+                ],
+            },
+        )
 
 if __name__ == "__main__":
     unittest.main()

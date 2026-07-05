@@ -118,6 +118,30 @@ def build_record_search_command(
     return command
 
 
+def build_record_list_command(
+    *,
+    config: BaseConfig,
+    table_id: str,
+    select_fields: list[str] | None = None,
+    filter_json: dict[str, Any] | None = None,
+    sort_json: list[dict[str, Any]] | None = None,
+    limit: int = 100,
+    dry_run: bool = False,
+) -> list[str]:
+    command = _base_command(config, "+record-list")
+    command.extend(["--table-id", table_id])
+    for field in select_fields or []:
+        command.extend(["--field-id", field])
+    if filter_json:
+        command.extend(["--filter-json", json.dumps(filter_json, ensure_ascii=False, separators=(",", ":"))])
+    if sort_json:
+        command.extend(["--sort-json", json.dumps(sort_json, ensure_ascii=False, separators=(",", ":"))])
+    command.extend(["--limit", str(limit), "--format", "json"])
+    if dry_run:
+        command.append("--dry-run")
+    return command
+
+
 def build_find_record_command(
     *,
     config: BaseConfig,
@@ -126,27 +150,14 @@ def build_find_record_command(
     key_value: str,
     dry_run: bool = False,
 ) -> list[str]:
-    body = {
-        "keyword": key_value[:50],
-        "search_fields": [key_field],
-        "filter": {"logic": "and", "conditions": [[key_field, "==", key_value]]},
-        "select_fields": [key_field],
-        "limit": 2,
-    }
-    command = _base_command(config, "+record-search")
-    command.extend(
-        [
-            "--table-id",
-            table_id,
-            "--json",
-            json.dumps(body, ensure_ascii=False, separators=(",", ":")),
-            "--format",
-            "json",
-        ]
+    return build_record_list_command(
+        config=config,
+        table_id=table_id,
+        select_fields=[key_field],
+        filter_json={"logic": "and", "conditions": [[key_field, "==", key_value]]},
+        limit=2,
+        dry_run=dry_run,
     )
-    if dry_run:
-        command.append("--dry-run")
-    return command
 
 
 def build_material_lookup_command(
@@ -157,30 +168,17 @@ def build_material_lookup_command(
     select_fields: list[str],
     dry_run: bool = False,
 ) -> list[str]:
-    body = {
-        "keyword": identifier[:50],
-        "search_fields": ["material_id", "material_code"],
-        "filter": {
+    return build_record_list_command(
+        config=config,
+        table_id=table_id,
+        select_fields=select_fields,
+        filter_json={
             "logic": "or",
             "conditions": [["material_id", "==", identifier], ["material_code", "==", identifier]],
         },
-        "select_fields": select_fields,
-        "limit": 2,
-    }
-    command = _base_command(config, "+record-search")
-    command.extend(
-        [
-            "--table-id",
-            table_id,
-            "--json",
-            json.dumps(body, ensure_ascii=False, separators=(",", ":")),
-            "--format",
-            "json",
-        ]
+        limit=2,
+        dry_run=dry_run,
     )
-    if dry_run:
-        command.append("--dry-run")
-    return command
 
 
 def build_upload_attachment_command(
@@ -291,6 +289,132 @@ def build_download_attachment_command(
     if overwrite:
         command.append("--overwrite")
     command.extend(["--format", "json"])
+    if dry_run:
+        command.append("--dry-run")
+    return command
+
+
+def build_field_create_command(
+    *,
+    config: BaseConfig,
+    table_id: str,
+    field: dict[str, Any],
+    dry_run: bool = False,
+) -> list[str]:
+    command = _base_command(config, "+field-create")
+    command.extend(
+        [
+            "--table-id",
+            table_id,
+            "--json",
+            json.dumps(field, ensure_ascii=False, separators=(",", ":")),
+            "--format",
+            "json",
+        ]
+    )
+    if field.get("type") == "lookup":
+        command.append("--i-have-read-guide")
+    if dry_run:
+        command.append("--dry-run")
+    return command
+
+
+def build_field_list_command(
+    *,
+    config: BaseConfig,
+    table_id: str,
+    dry_run: bool = False,
+) -> list[str]:
+    command = _base_command(config, "+field-list")
+    command.extend(["--table-id", table_id, "--format", "json"])
+    if dry_run:
+        command.append("--dry-run")
+    return command
+
+
+def build_view_create_command(
+    *,
+    config: BaseConfig,
+    table_id: str,
+    view: dict[str, Any],
+    dry_run: bool = False,
+) -> list[str]:
+    command = _base_command(config, "+view-create")
+    command.extend(
+        [
+            "--table-id",
+            table_id,
+            "--json",
+            json.dumps(view, ensure_ascii=False, separators=(",", ":")),
+            "--format",
+            "json",
+        ]
+    )
+    if dry_run:
+        command.append("--dry-run")
+    return command
+
+
+def build_view_list_command(
+    *,
+    config: BaseConfig,
+    table_id: str,
+    dry_run: bool = False,
+) -> list[str]:
+    command = _base_command(config, "+view-list")
+    command.extend(["--table-id", table_id, "--format", "json"])
+    if dry_run:
+        command.append("--dry-run")
+    return command
+
+
+def build_view_set_visible_fields_command(
+    *,
+    config: BaseConfig,
+    table_id: str,
+    view_id: str,
+    visible_fields: list[str],
+    dry_run: bool = False,
+) -> list[str]:
+    command = _base_command(config, "+view-set-visible-fields")
+    command.extend(
+        [
+            "--table-id",
+            table_id,
+            "--view-id",
+            view_id,
+            "--json",
+            json.dumps({"visible_fields": visible_fields}, ensure_ascii=False, separators=(",", ":")),
+            "--format",
+            "json",
+        ]
+    )
+    if dry_run:
+        command.append("--dry-run")
+    return command
+
+
+def build_view_set_filter_command(
+    *,
+    config: BaseConfig,
+    table_id: str,
+    view_id: str,
+    filter_json: dict[str, Any],
+    dry_run: bool = False,
+) -> list[str]:
+    command = _base_command(config, "+view-set-filter")
+    command.extend(
+        [
+            "--table-id",
+            table_id,
+            "--view-id",
+            view_id,
+            "--json",
+            json.dumps(filter_json, ensure_ascii=False, separators=(",", ":")),
+            "--format",
+            "json",
+        ]
+    )
     if dry_run:
         command.append("--dry-run")
     return command
@@ -445,6 +569,48 @@ def search_slides(
     return run_json(command)
 
 
+def search_decks(
+    config: BaseConfig,
+    *,
+    keyword: str,
+    search_fields: list[str],
+    select_fields: list[str],
+    filter_json: dict[str, Any] | None,
+    limit: int,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    command = build_record_search_command(
+        config=config,
+        table_id=config.decks_table,
+        keyword=keyword,
+        search_fields=search_fields,
+        select_fields=select_fields,
+        filter_json=filter_json,
+        limit=limit,
+        dry_run=dry_run,
+    )
+    return run_json(command)
+
+
+def list_decks(
+    config: BaseConfig,
+    *,
+    select_fields: list[str],
+    filter_json: dict[str, Any] | None,
+    limit: int,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    command = build_record_list_command(
+        config=config,
+        table_id=config.decks_table,
+        select_fields=select_fields,
+        filter_json=filter_json,
+        limit=limit,
+        dry_run=dry_run,
+    )
+    return run_json(command)
+
+
 def lookup_material(
     config: BaseConfig,
     *,
@@ -457,6 +623,30 @@ def lookup_material(
         table_id=config.slides_table,
         identifier=identifier,
         select_fields=select_fields,
+        dry_run=dry_run,
+    )
+    return run_json(command)
+
+
+def list_materials(
+    config: BaseConfig,
+    *,
+    deck_id: str,
+    page_roles: list[str] | None,
+    select_fields: list[str],
+    limit: int,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    conditions: list[Any] = [["deck_id", "==", deck_id]]
+    if page_roles:
+        conditions.append({"logic": "or", "conditions": [["page_role", "==", role] for role in page_roles]})
+    command = build_record_list_command(
+        config=config,
+        table_id=config.slides_table,
+        select_fields=select_fields,
+        filter_json={"logic": "and", "conditions": conditions},
+        sort_json=[{"field": "slide_index", "desc": False}],
+        limit=limit,
         dry_run=dry_run,
     )
     return run_json(command)
@@ -480,6 +670,60 @@ def upload_attachment(
         dry_run=dry_run,
     )
     return run_json(command)
+
+
+def create_field(config: BaseConfig, *, table_id: str, field: dict[str, Any], dry_run: bool = False) -> dict[str, Any]:
+    return run_json(build_field_create_command(config=config, table_id=table_id, field=field, dry_run=dry_run))
+
+
+def list_fields(config: BaseConfig, *, table_id: str, dry_run: bool = False) -> dict[str, Any]:
+    return run_json(build_field_list_command(config=config, table_id=table_id, dry_run=dry_run))
+
+
+def create_view(config: BaseConfig, *, table_id: str, view: dict[str, Any], dry_run: bool = False) -> dict[str, Any]:
+    return run_json(build_view_create_command(config=config, table_id=table_id, view=view, dry_run=dry_run))
+
+
+def list_views(config: BaseConfig, *, table_id: str, dry_run: bool = False) -> dict[str, Any]:
+    return run_json(build_view_list_command(config=config, table_id=table_id, dry_run=dry_run))
+
+
+def set_view_visible_fields(
+    config: BaseConfig,
+    *,
+    table_id: str,
+    view_id: str,
+    visible_fields: list[str],
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    return run_json(
+        build_view_set_visible_fields_command(
+            config=config,
+            table_id=table_id,
+            view_id=view_id,
+            visible_fields=visible_fields,
+            dry_run=dry_run,
+        )
+    )
+
+
+def set_view_filter(
+    config: BaseConfig,
+    *,
+    table_id: str,
+    view_id: str,
+    filter_json: dict[str, Any],
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    return run_json(
+        build_view_set_filter_command(
+            config=config,
+            table_id=table_id,
+            view_id=view_id,
+            filter_json=filter_json,
+            dry_run=dry_run,
+        )
+    )
 
 
 def get_attachment_tokens(
@@ -532,6 +776,13 @@ def replace_attachment(
         record_id=record_id,
         field_id=field_id,
     )
+    upload_result = upload_attachment(
+        config,
+        table_id=table_id,
+        record_id=record_id,
+        field_id=field_id,
+        files=files,
+    )
     remove_result = None
     if existing_tokens:
         remove_result = remove_attachment(
@@ -541,13 +792,6 @@ def replace_attachment(
             field_id=field_id,
             file_tokens=existing_tokens,
         )
-    upload_result = upload_attachment(
-        config,
-        table_id=table_id,
-        record_id=record_id,
-        field_id=field_id,
-        files=files,
-    )
     return {
         "removed": len(existing_tokens),
         "remove_result": remove_result,

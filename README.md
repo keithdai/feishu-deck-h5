@@ -95,6 +95,7 @@ python3 deck-json/render-deck.py runs/<ts>/output/deck.json runs/<ts>/output/ --
 - **32 个 richness 原语** —— `.kpi-strip` / `.cta-box` / `.pullquote` / `.ui-wave` …… 专门防止 AI 交付"骨架感"的寡淡 deck。
 - **飞书产品官方 logo** —— aily / 多维表格 / 妙搭 / 飞书会议 / 飞书人事 / 集成平台 全套,无需自己画 SVG。
 - **Native slide lift** —— 把一张现成 slide 原样搬进来,自动归一化进体系。
+- **deck-library（可选）** —— 用飞书多维表格把完整 deck 和页面素材分层管理:`Decks` 表维护可直接打开的完整材料链接,`Materials` 表维护每页素材,支持 schema/视图迁移、链接健康检查、先找完整 deck、再按页面角色下钻复用。
 - **媒体进页自动播放 / 重启 + 自动声音**、**中文换行平衡 / 末行孤字防治**、**性能预算硬约束**(`audit_perf`)。
 - **每次 run 自动产出 `FEEDBACK.md` / `PROMPTS.md`** —— skill 自身可被持续打磨。
 

@@ -1,0 +1,82 @@
+import importlib.util
+import json
+import subprocess
+import sys
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[3]
+ASSETS = ROOT / "skills" / "deck-library" / "assets"
+
+
+def load_module(name: str):
+    sys.path.insert(0, str(ASSETS))
+    spec = importlib.util.spec_from_file_location(name, ASSETS / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+class SchemaMigrationPlanTests(unittest.TestCase):
+    def test_build_migration_plan_includes_material_views_and_operational_deck_views(self):
+        migrate_schema = load_module("migrate_schema")
+
+        plan = migrate_schema.build_migration_plan(
+            base_token="base123",
+            decks_table="tblDecks",
+            materials_table="tblMaterials",
+        )
+
+        self.assertEqual(plan["operation"], "migrate_schema")
+        self.assertNotIn("base_token", plan)
+        self.assertEqual(plan["base_token_configured"], True)
+        self.assertIn("Materials Gallery", [view["name"] for view in plan["views"]["materials"]])
+        self.assertIn("可直接使用", [view["name"] for view in plan["views"]["decks"]])
+        self.assertIn("测试样本", [view["name"] for view in plan["views"]["decks"]])
+        self.assertEqual(plan["visible_fields"]["materials"][0:4], ["material_id", "thumbnail", "素材名称", "素材描述"])
+        self.assertTrue(any(field["name"] == "关联Deck" and field["type"] == "link" for field in plan["fields"]["materials"]))
+        self.assertFalse(any(field["type"] == "lookup" for field in plan["fields"]["materials"]))
+        self.assertIn("关联Deck", plan["visible_fields"]["materials"])
+        deck_fields = {field["name"]: field for field in plan["fields"]["decks"]}
+        material_fields = {field["name"]: field for field in plan["fields"]["materials"]}
+        for field_name in ["online_url", "deck_type", "recommended_use", "reuse_scope", "last_checked_at", "owner"]:
+            self.assertIn(field_name, deck_fields)
+        for field_name in ["页面价值", "关键词", "edit_notes", "is_representative_page"]:
+            self.assertIn(field_name, material_fields)
+        self.assertEqual(deck_fields["适用场景"]["type"], "text")
+        self.assertEqual(deck_fields["access_status"]["type"], "text")
+        self.assertEqual(material_fields["reuse_status"]["type"], "text")
+        self.assertEqual(material_fields["page_role"]["type"], "text")
+        self.assertEqual(material_fields["is_representative_page"]["type"], "checkbox")
+
+    def test_noop_errors_are_reported_as_idempotent_success(self):
+        migrate_schema = load_module("migrate_schema")
+
+        result = migrate_schema.call_or_noop(lambda: (_ for _ in ()).throw(RuntimeError("no operation produced")))
+
+        self.assertEqual(result["action"], "noop")
+        self.assertIn("no operation produced", result["reason"])
+
+    def test_migrate_schema_dry_run_prints_plan_without_configuration(self):
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(ASSETS / "migrate_schema.py"),
+                "--dry-run",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        payload = json.loads(completed.stdout)
+        self.assertEqual(payload["mode"], "dry-run")
+        self.assertIn("fields", payload)
+
+
+if __name__ == "__main__":
+    unittest.main()
