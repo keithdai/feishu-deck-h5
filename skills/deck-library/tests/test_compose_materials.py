@@ -109,6 +109,49 @@ class ComposeMaterialsTests(unittest.TestCase):
         self.assertEqual(summary["by_quality_tier"]["draft"], 1)
         self.assertTrue(any("M001" in warning for warning in warnings))
 
+    def test_motion_summary_counts_motion_tiers_and_has_motion(self):
+        compose_materials = load_module("compose_materials")
+        records = [
+            {
+                "material_code": "M001",
+                "material_type": ["native_h5"],
+                "quality_tier": ["delivery"],
+                "has_motion": True,
+                "motion_tier": ["subtle"],
+            },
+            {
+                "material_code": "M002",
+                "material_type": ["replica_screenshot"],
+                "quality_tier": ["draft"],
+                "has_motion": False,
+                "motion_tier": ["none"],
+            },
+        ]
+
+        summary = compose_materials.motion_summary(records)
+
+        self.assertEqual(summary["total"], 2)
+        self.assertEqual(summary["with_motion"], 1)
+        self.assertEqual(summary["by_motion_tier"]["subtle"], 1)
+        self.assertEqual(summary["by_motion_tier"]["none"], 1)
+
+    def test_motion_warnings_report_replica_motion_exclusion(self):
+        compose_materials = load_module("compose_materials")
+        records = [
+            {
+                "material_code": "M002",
+                "material_type": ["replica_screenshot"],
+                "quality_tier": ["draft"],
+                "has_motion": False,
+                "motion_tier": ["none"],
+            }
+        ]
+
+        warnings = compose_materials.motion_warnings(records)
+
+        self.assertTrue(any("M002" in warning for warning in warnings))
+        self.assertTrue(any("截图" in warning for warning in warnings))
+
     def test_write_deck_creates_deck_json(self):
         compose_materials = load_module("compose_materials")
         deck = {"version": "1.0", "deck": {"title": "Demo"}, "slides": []}

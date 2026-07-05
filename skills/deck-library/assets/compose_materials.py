@@ -28,6 +28,9 @@ MATERIAL_SELECT_FIELDS = [
     "material_type",
     "quality_tier",
     "fidelity_notes",
+    "has_motion",
+    "motion_tier",
+    "motion_notes",
 ]
 
 
@@ -84,6 +87,16 @@ def scalar_cell(value: Any, default: str = "unknown") -> str:
     return str(value)
 
 
+def bool_cell(value: Any) -> bool:
+    if isinstance(value, list):
+        return any(bool_cell(item) for item in value)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "yes", "y"}
+    return bool(value)
+
+
 def quality_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
     by_material_type: dict[str, int] = {}
     by_quality_tier: dict[str, int] = {}
@@ -112,6 +125,37 @@ def quality_warnings(records: list[dict[str, Any]]) -> list[str]:
         + ", ".join(replica_codes)
         + "；适合快速预览/草稿组合，正式客户交付前建议升级为 native H5。"
     ]
+
+
+def motion_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
+    by_motion_tier: dict[str, int] = {}
+    with_motion = 0
+    for record in records:
+        motion_tier = scalar_cell(record.get("motion_tier"), default="none")
+        by_motion_tier[motion_tier] = by_motion_tier.get(motion_tier, 0) + 1
+        if bool_cell(record.get("has_motion")):
+            with_motion += 1
+    return {
+        "total": len(records),
+        "with_motion": with_motion,
+        "by_motion_tier": by_motion_tier,
+    }
+
+
+def motion_warnings(records: list[dict[str, Any]]) -> list[str]:
+    replica_codes = [
+        str(record.get("material_code") or record.get("material_id") or "<unknown>")
+        for record in records
+        if scalar_cell(record.get("material_type")) == "replica_screenshot"
+    ]
+    warnings: list[str] = []
+    if replica_codes:
+        warnings.append(
+            "截图素材 "
+            + ", ".join(replica_codes)
+            + " 默认不加动效；如需高级动效，先升级为 native H5。"
+        )
+    return warnings
 
 
 def build_deck_from_material_records(records: list[dict[str, Any]], title: str) -> dict[str, Any]:
@@ -298,6 +342,8 @@ def main() -> int:
                     "slide_count": len(deck["slides"]),
                     "quality_summary": quality_summary(records),
                     "quality_warnings": quality_warnings(records),
+                    "motion_summary": motion_summary(records),
+                    "motion_warnings": motion_warnings(records),
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -335,6 +381,8 @@ def main() -> int:
                 "materials": args.materials,
                 "quality_summary": quality_summary(records),
                 "quality_warnings": quality_warnings(records),
+                "motion_summary": motion_summary(records),
+                "motion_warnings": motion_warnings(records),
                 "asset_roots": [str(path) for path in asset_roots],
                 "downloaded_asset_roots": [str(path) for path in downloaded_asset_roots],
                 "render": render_result,
