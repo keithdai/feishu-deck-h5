@@ -16,6 +16,10 @@ desktop.ini
 *.swp
 *.swo
 
+# Local git worktrees
+.worktrees/
+worktrees/
+
 # Build artifacts (regenerable from build.sh)
 examples/sample-deck-inline.html
 templates/slide-recipes.html
