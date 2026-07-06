@@ -153,6 +153,9 @@ def infer_industry_from_deck_name(title: str) -> str:
 
 def is_full_bleed_image_replica(slide: dict[str, object]) -> bool:
     data = slide.get("data") if isinstance(slide.get("data"), dict) else {}
+    page_image = data.get("page_image") if isinstance(data, dict) else None
+    if slide.get("layout") == "replica" and isinstance(page_image, str) and page_image:
+        return True
     html_value = data.get("html") if isinstance(data, dict) else ""
     if not isinstance(html_value, str):
         return False

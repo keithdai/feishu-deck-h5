@@ -44,35 +44,40 @@ skills/deck-library/
 
 ```bash
 python3 skills/deck-library/assets/preflight.py
-python3 skills/deck-library/assets/archive.py runs/example/output --dry-run
-python3 skills/deck-library/assets/archive.py runs/example/output --limit-slides 3 --dry-run
-python3 skills/deck-library/assets/archive.py runs/example/output --metadata-only --dry-run
-python3 skills/deck-library/assets/upload_artifacts.py runs/example/output --deck-id deck_20260704_001 --dry-run
-python3 skills/deck-library/assets/upload_thumbnails.py runs/example/output --deck-id deck_20260704_001 --dry-run
 python3 skills/deck-library/assets/migrate_schema.py --dry-run
 python3 skills/deck-library/assets/search_decks.py "客户提案 pitch deck" --dry-run
 python3 skills/deck-library/assets/list_deck_materials.py deck_20260704_001 --dry-run
 python3 skills/deck-library/assets/search.py "客户提案" --dry-run
 python3 skills/deck-library/assets/update_deck_metadata.py deck_20260704_001 --set access_status=ready
 python3 skills/deck-library/assets/update_material_metadata.py deck_20260704_001:M001 --set reuse_status=可直接复用
-python3 skills/deck-library/assets/compose_materials.py M001 M002 --dry-run
+python3 skills/deck-library/assets/compose_materials.py --help
 python3 skills/deck-library/assets/check_links.py --dry-run
+```
+
+With a real rendered `feishu-deck-h5` output directory, also run:
+
+```bash
+python3 skills/deck-library/assets/archive.py <run-output-dir> --dry-run
+python3 skills/deck-library/assets/archive.py <run-output-dir> --limit-slides 3 --dry-run
+python3 skills/deck-library/assets/archive.py <run-output-dir> --metadata-only --dry-run
+python3 skills/deck-library/assets/upload_artifacts.py <run-output-dir> --deck-id deck_20260704_001 --dry-run
+python3 skills/deck-library/assets/upload_thumbnails.py <run-output-dir> --deck-id deck_20260704_001 --dry-run
 ```
 
 To perform real operations, pass explicit intent and configuration:
 
 ```bash
-python3 skills/deck-library/assets/archive.py runs/example/output --write \
+python3 skills/deck-library/assets/archive.py <run-output-dir> --write \
   --base-token <base_token> --decks-table <tbl_decks> --slides-table <tbl_slides>
 
-python3 skills/deck-library/assets/archive.py runs/example/output --metadata-only --write \
+python3 skills/deck-library/assets/archive.py <run-output-dir> --metadata-only --write \
   --base-token <base_token> --decks-table <tbl_decks> --slides-table <tbl_slides>
 
-python3 skills/deck-library/assets/upload_thumbnails.py runs/example/output \
+python3 skills/deck-library/assets/upload_thumbnails.py <run-output-dir> \
   --deck-id deck_20260704_001 --skip-existing --resume --command-timeout 90 \
   --base-token <base_token> --decks-table <tbl_decks> --slides-table <tbl_slides>
 
-python3 skills/deck-library/assets/upload_artifacts.py runs/example/output \
+python3 skills/deck-library/assets/upload_artifacts.py <run-output-dir> \
   --deck-id deck_20260704_001 --skip-existing --resume --command-timeout 180 \
   --base-token <base_token> --decks-table <tbl_decks> --slides-table <tbl_slides>
 

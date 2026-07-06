@@ -279,6 +279,11 @@ class ArchivePlanTests(unittest.TestCase):
         self.assertIn("vipshop pilot cover", records[0]["page_description"])
         self.assertIn("source slide 01", records[0]["page_description"])
         self.assertIn("page 1", records[0]["page_description"])
+        self.assertEqual(records[0]["material_type"], "replica_screenshot")
+        self.assertEqual(records[0]["quality_tier"], "draft")
+        self.assertIn("截图", records[0]["fidelity_notes"])
+        self.assertEqual(records[0]["has_motion"], False)
+        self.assertEqual(records[0]["motion_tier"], "none")
 
     def test_slide_records_mark_full_bleed_image_pages_as_replica_screenshot(self):
         archive = load_module("archive")
