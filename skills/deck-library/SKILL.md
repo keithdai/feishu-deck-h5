@@ -95,6 +95,7 @@ When a complete deck is a good fit, drill down from Decks to Materials by
 
 Operational views should be available for ongoing library maintenance:
 
+- `表格`: default Decks grid view, kept in the same human-first order.
 - `可直接使用`: complete decks with `access_status=ready`.
 - `待补链接`: decks with missing or failed `online_url` health.
 - `测试样本`: smoke-test entries and validation examples.
@@ -191,6 +192,8 @@ by Base; if so, keep the user-facing fields immediately after it.
 
 Materials operational views should include:
 
+- `Grid View`: default Materials grid view, kept in the same human-first order.
+- `Slides Gallery`: legacy gallery view kept aligned with `Materials Gallery`.
 - `Materials Gallery`: thumbnail-first picking view.
 - `挑页｜按Deck`: grouped by `Deck中文名 -> page_role -> reuse_status`.
 - `挑页｜按行业`: grouped by `行业 -> page_role -> reuse_status`.

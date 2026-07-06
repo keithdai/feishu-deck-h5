@@ -203,12 +203,15 @@ def build_migration_plan(base_token: str, decks_table: str, materials_table: str
         },
         "views": {
             "decks": [
+                {"name": "表格", "type": "grid", "filter": {"conditions": []}},
                 {"name": "可直接使用", "type": "grid", "filter": {"logic": "and", "conditions": [["access_status", "==", "ready"]]}},
                 {"name": "待补链接", "type": "grid", "filter": {"logic": "or", "conditions": [["link_health", "==", "failed"], ["online_url", "empty"]]}},
                 {"name": "测试样本", "type": "grid", "filter": {"logic": "and", "conditions": [["中文名称", "intersects", "测试"]]}},
                 {"name": "Deck Covers", "type": "gallery", "filter": {"conditions": []}},
             ],
             "materials": [
+                {"name": "Grid View", "type": "grid", "filter": {"conditions": []}},
+                {"name": "Slides Gallery", "type": "gallery", "filter": {"conditions": []}},
                 {"name": "Materials Gallery", "type": "gallery", "filter": {"logic": "and", "conditions": [["status", "==", "active"]]}},
                 {
                     "name": "挑页｜按Deck",

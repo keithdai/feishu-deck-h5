@@ -153,8 +153,8 @@ python3 skills/deck-library/assets/check_links.py --write \
   restores required `assets/` and `pages/`, and renders HTML.
 - `compose_materials.py`: can also select pages by `--deck-id` plus repeated
   `--page-role` values, preserving the source deck order.
-- `migrate_schema.py`: creates missing operational fields/views and keeps
-  Decks/Materials view order human-first.
+- `migrate_schema.py`: creates missing operational fields/views and keeps default
+  plus operational Decks/Materials view order human-first.
 - `check_links.py`: checks `Decks.online_url` and writes `link_health`,
   `链接状态`, `last_checked_at`, and `access_status=ready` when reachable.
 - `compose.py`: merge local selected deck artifacts through `deck.json`, then render unless `--no-render` is set.
@@ -169,11 +169,12 @@ python3 skills/deck-library/assets/check_links.py --write \
 - `Decks.deck_json`, `Decks.inline_html`, and `Decks.assets_zip` are the reusable
   source package for compose/handoff; they are not normal text cells and must be
   written through attachment upload.
-- The sample Base includes `Deck Covers` and `Materials Gallery` gallery views whose
-  card covers are bound to these attachment fields.
+- The sample Base includes `Deck Covers`, `Slides Gallery`, and `Materials Gallery`
+  gallery views whose card covers are bound to these attachment fields.
 - Operational views should include complete deck states such as `可直接使用`,
-  `待补链接`, and `测试样本`, plus material picking views such as `挑页｜按Deck`,
-  `挑页｜按行业`, `挑页｜可复用`, `按Deck下钻`, `可直接复用页面`, and `代表页`.
+  `待补链接`, and `测试样本`, plus default table views such as `表格` / `Grid View`
+  and material picking views such as `挑页｜按Deck`, `挑页｜按行业`, `挑页｜可复用`,
+  `按Deck下钻`, `可直接复用页面`, and `代表页`.
 - Attachment upload uses replace semantics: old files in the target attachment
   cell are removed before the latest artifact or thumbnail is uploaded.
 - Large archive runs should use two phases: first `archive.py --metadata-only

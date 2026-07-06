@@ -34,12 +34,16 @@ class SchemaMigrationPlanTests(unittest.TestCase):
         self.assertNotIn("base_token", plan)
         self.assertEqual(plan["base_token_configured"], True)
         material_views = {view["name"]: view for view in plan["views"]["materials"]}
+        deck_views = {view["name"]: view for view in plan["views"]["decks"]}
+        self.assertIn("Grid View", material_views)
+        self.assertIn("Slides Gallery", material_views)
         self.assertIn("Materials Gallery", material_views)
         self.assertIn("挑页｜按Deck", material_views)
         self.assertIn("挑页｜按行业", material_views)
         self.assertIn("挑页｜可复用", material_views)
-        self.assertIn("可直接使用", [view["name"] for view in plan["views"]["decks"]])
-        self.assertIn("测试样本", [view["name"] for view in plan["views"]["decks"]])
+        self.assertIn("表格", deck_views)
+        self.assertIn("可直接使用", deck_views)
+        self.assertIn("测试样本", deck_views)
         self.assertEqual(
             plan["visible_fields"]["materials"][0:8],
             ["thumbnail", "Deck中文名", "行业", "素材名称", "素材描述", "page_role", "reuse_status", "material_code"],
