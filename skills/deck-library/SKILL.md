@@ -171,7 +171,7 @@ motion; propose a native H5 upgrade first.
 
 Decks views should put complete deck browsing fields before technical artifacts:
 
-- Front: `cover_thumbnail`, `中文名称`, `行业`, `中文描述`, `online_url`, `适用场景`, `推荐用法`, `复用范围`, `链接状态`.
+- Front: `cover_thumbnail`, `中文名称`, `行业`, `中文描述`, `适用场景`, `推荐用法`, `复用范围`, `链接状态`, `online_url`.
 - Quality and access: `quality_tier`, `access_status`, `link_health`, `last_checked_at`, `owner`, `status`.
 - Agent aliases: `title`, `deck_type`, `scene`, `tags`, `recommended_use`, `reuse_scope`.
 - Technical fields last: `deck_id`, `source`, `slide_count`, `content_hash`, `deck_json`, `inline_html`, `assets_zip`.
@@ -179,11 +179,11 @@ Decks views should put complete deck browsing fields before technical artifacts:
 User-facing fields first. Materials views should put human browsing fields before
 technical fields so the Base is easy to scan:
 
-- Front: `thumbnail`, `Deck中文名`, `素材名称`, `page_role`, `reuse_status`, `行业`, `material_code`, `slide_index`, `deck_id`, `关联Deck`.
-- Browse support: `素材描述`, `适用场景`, `页面价值`, `视觉类型`, `关键词`.
+- Front: `thumbnail`, `Deck中文名`, `行业`, `素材名称`, `素材描述`, `page_role`, `reuse_status`, `material_code`, `slide_index`, `关联Deck`.
+- Browse support: `适用场景`, `页面价值`, `视觉类型`, `关键词`, `edit_notes`, `is_representative_page`.
 - Search support: `page_description`, `title`, `scene`, `tags`, `visual_summary`, `content_summary`.
-- Middle: `status`, `material_type`, `quality_tier`, `has_motion`, `motion_tier`, `material_id`, `screen_label`, `layout`, `slide_key`.
-- Technical fields last: `deck_id`, `source_artifact_ref`, `source`, `theme`, `accent`, `content_hash`, `slide_payload_json`.
+- Middle: `status`, `quality_tier`, `material_type`, `has_motion`, `motion_tier`, `screen_label`, `layout`, `slide_key`.
+- Technical/search keys last: `deck_id`, `material_id`, `source_artifact_ref`, `source`, `theme`, `accent`, `content_hash`, `slide_payload_json`.
 
 Gallery views should use `thumbnail` as the card cover and show `material_code`
 plus `素材名称` / `素材描述` near the top. The primary field may be forced first

@@ -184,10 +184,13 @@ python3 skills/deck-library/assets/check_links.py --write \
 ## Reusable vs Provenance Fields
 
 - Reusable fields: `deck_json`, `inline_html`, `assets_zip`, `cover_thumbnail`, `thumbnail`.
-- Complete deck browsing fields: `中文名称`, `中文描述`, `online_url`, `适用场景`,
-  `推荐用法`, `复用范围`, `链接状态`, plus technical aliases such as `recommended_use`.
-- Search/compose fields: `material_id`, `material_code`, `deck_id`, `Deck中文名`,
-  `行业`, `page_role`, `reuse_status`, `page_description`, `slide_payload_json`.
+- Complete deck browsing fields: `cover_thumbnail`, `中文名称`, `行业`, `中文描述`,
+  `适用场景`, `推荐用法`, `复用范围`, `链接状态`, and `online_url`.
+- Material browsing fields: `thumbnail`, `Deck中文名`, `行业`, `素材名称`, `素材描述`,
+  `page_role`, `reuse_status`, `material_code`, and `slide_index`.
+- Agent search/compose fields: `material_id`, `deck_id`, `page_description`,
+  `slide_payload_json`, `source_artifact_ref`, and technical aliases such as
+  `recommended_use`.
 - Provenance fields: `source_run_path` and any local `file://` path.
 - Search and gallery views should expose reusable fields, not local provenance paths.
 - Agents should ask for or return `material_code`/`material_id`; composition should

@@ -42,7 +42,11 @@ class SchemaMigrationPlanTests(unittest.TestCase):
         self.assertIn("测试样本", [view["name"] for view in plan["views"]["decks"]])
         self.assertEqual(
             plan["visible_fields"]["materials"][0:8],
-            ["thumbnail", "Deck中文名", "素材名称", "page_role", "reuse_status", "行业", "material_code", "slide_index"],
+            ["thumbnail", "Deck中文名", "行业", "素材名称", "素材描述", "page_role", "reuse_status", "material_code"],
+        )
+        self.assertEqual(
+            plan["visible_fields"]["decks"][0:8],
+            ["cover_thumbnail", "中文名称", "行业", "中文描述", "适用场景", "推荐用法", "复用范围", "链接状态"],
         )
         self.assertTrue(any(field["name"] == "关联Deck" and field["type"] == "link" for field in plan["fields"]["materials"]))
         self.assertFalse(any(field["type"] == "lookup" for field in plan["fields"]["materials"]))

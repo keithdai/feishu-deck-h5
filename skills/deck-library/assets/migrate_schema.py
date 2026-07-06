@@ -6,13 +6,13 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from typing import Any
 
 import lark_base
 
 
 DECK_VISIBLE_FIELDS = [
-    "deck_id",
     "cover_thumbnail",
     "中文名称",
     "行业",
@@ -22,12 +22,13 @@ DECK_VISIBLE_FIELDS = [
     "复用范围",
     "链接状态",
     "online_url",
-    "slide_count",
+    "owner",
     "quality_tier",
     "access_status",
     "link_health",
-    "owner",
     "last_checked_at",
+    "slide_count",
+    "deck_id",
     "title",
     "deck_type",
     "scene",
@@ -53,24 +54,25 @@ DECK_VISIBLE_FIELDS = [
 MATERIAL_VISIBLE_FIELDS = [
     "thumbnail",
     "Deck中文名",
+    "行业",
     "素材名称",
+    "素材描述",
     "page_role",
     "reuse_status",
-    "行业",
     "material_code",
     "slide_index",
-    "deck_id",
     "关联Deck",
-    "素材描述",
     "适用场景",
     "页面价值",
     "视觉类型",
     "关键词",
     "edit_notes",
     "is_representative_page",
+    "quality_tier",
+    "status",
+    "deck_id",
     "material_id",
     "material_type",
-    "quality_tier",
     "fidelity_notes",
     "motion_tier",
     "motion_notes",
@@ -78,7 +80,6 @@ MATERIAL_VISIBLE_FIELDS = [
     "page_description",
     "layout",
     "slide_key",
-    "status",
     "slide_payload_json",
     "source_artifact_ref",
     "content_hash",
@@ -297,6 +298,19 @@ def set_view_visible_fields_ordered(
                 visible_fields=visible_fields[:3],
             )
         )
+        # Expanding directly from a short prefix to the full list can also be
+        # treated as a no-op by Base for existing views. Grow the visible prefix
+        # in chunks so both visibility and order are persisted reliably.
+        for length in range(6, len(visible_fields), 6):
+            call_or_noop(
+                lambda length=length: lark_base.set_view_visible_fields(
+                    config,
+                    table_id=table_id,
+                    view_id=view_id,
+                    visible_fields=visible_fields[:length],
+                )
+            )
+            time.sleep(0.8)
     return call_or_noop(
         lambda: lark_base.set_view_visible_fields(
             config,
