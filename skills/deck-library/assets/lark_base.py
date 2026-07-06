@@ -12,6 +12,7 @@ from typing import Any
 
 DEFAULT_PROFILE = "bytedance"
 DEFAULT_IDENTITY = "user"
+COMMAND_TIMEOUT_SECONDS: float | None = None
 
 
 @dataclass(frozen=True)
@@ -420,14 +421,81 @@ def build_view_set_filter_command(
     return command
 
 
+def build_view_set_group_command(
+    *,
+    config: BaseConfig,
+    table_id: str,
+    view_id: str,
+    group_json: dict[str, Any],
+    dry_run: bool = False,
+) -> list[str]:
+    command = _base_command(config, "+view-set-group")
+    command.extend(
+        [
+            "--table-id",
+            table_id,
+            "--view-id",
+            view_id,
+            "--json",
+            json.dumps(group_json, ensure_ascii=False, separators=(",", ":")),
+            "--format",
+            "json",
+        ]
+    )
+    if dry_run:
+        command.append("--dry-run")
+    return command
+
+
+def build_view_set_sort_command(
+    *,
+    config: BaseConfig,
+    table_id: str,
+    view_id: str,
+    sort_json: list[dict[str, Any]],
+    dry_run: bool = False,
+) -> list[str]:
+    command = _base_command(config, "+view-set-sort")
+    command.extend(
+        [
+            "--table-id",
+            table_id,
+            "--view-id",
+            view_id,
+            "--json",
+            json.dumps({"sort_config": sort_json}, ensure_ascii=False, separators=(",", ":")),
+            "--format",
+            "json",
+        ]
+    )
+    if dry_run:
+        command.append("--dry-run")
+    return command
+
+
 def run_json(command: list[str]) -> dict[str, Any]:
-    completed = subprocess.run(command, check=False, capture_output=True, text=True)
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"lark-cli command timed out after {exc.timeout}s") from exc
     if completed.returncode != 0:
         raise RuntimeError(completed.stderr.strip() or completed.stdout.strip())
     try:
         parsed = json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"lark-cli returned non-JSON output: {completed.stdout[:200]}") from exc
+        json_start = completed.stdout.find("{")
+        if json_start < 0:
+            raise RuntimeError(f"lark-cli returned non-JSON output: {completed.stdout[:200]}") from exc
+        try:
+            parsed = json.loads(completed.stdout[json_start:])
+        except json.JSONDecodeError as nested_exc:
+            raise RuntimeError(f"lark-cli returned non-JSON output: {completed.stdout[:200]}") from nested_exc
     if not isinstance(parsed, dict):
         raise RuntimeError("lark-cli JSON output must be an object")
     return parsed
@@ -721,6 +789,44 @@ def set_view_filter(
             table_id=table_id,
             view_id=view_id,
             filter_json=filter_json,
+            dry_run=dry_run,
+        )
+    )
+
+
+def set_view_group(
+    config: BaseConfig,
+    *,
+    table_id: str,
+    view_id: str,
+    group_json: dict[str, Any],
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    return run_json(
+        build_view_set_group_command(
+            config=config,
+            table_id=table_id,
+            view_id=view_id,
+            group_json=group_json,
+            dry_run=dry_run,
+        )
+    )
+
+
+def set_view_sort(
+    config: BaseConfig,
+    *,
+    table_id: str,
+    view_id: str,
+    sort_json: list[dict[str, Any]],
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    return run_json(
+        build_view_set_sort_command(
+            config=config,
+            table_id=table_id,
+            view_id=view_id,
+            sort_json=sort_json,
             dry_run=dry_run,
         )
     )

@@ -15,8 +15,8 @@ Steps:
 2. Run `migrate_schema.py --write` only after the Base/table IDs are unambiguous.
 3. Create missing human/agent fields, including optional `关联Deck` for Materials.
 4. Keep the writable text `deck_id` field as the automation key; do not destructively convert it into a link field.
-5. Create or update operational views: `可直接使用`, `待补链接`, `测试样本`, `Materials Gallery`, `按Deck下钻`, `可直接复用页面`, and `代表页`.
-6. Put thumbnails and Chinese browsing fields before technical artifact fields.
+5. Create or update operational views: `可直接使用`, `待补链接`, `测试样本`, `Materials Gallery`, `挑页｜按Deck`, `挑页｜按行业`, `挑页｜可复用`, `按Deck下钻`, `可直接复用页面`, and `代表页`.
+6. Put thumbnails, `Deck中文名`, `page_role`, `reuse_status`, and `行业` before technical artifact fields.
 
 ## Archive Flow
 
@@ -53,9 +53,27 @@ Reusable deck artifacts are also uploaded as Base attachments, while
 `source_run_path` remains provenance only. Attachment upload uses replace
 semantics, so repeated archive runs do not append duplicate files.
 
+For large PPT/H5 batches, prefer two-phase ingest:
+
+1. Run `archive.py <output_dir> --metadata-only --write` to upsert Decks and
+   Materials records without creating `assets.zip` or uploading attachments.
+2. Run `upload_artifacts.py <output_dir> --deck-id <deck_id> --skip-existing
+   --resume` to fill `Decks.deck_json`, `Decks.inline_html`, and
+   `Decks.assets_zip`.
+3. Run `upload_thumbnails.py <output_dir> --deck-id <deck_id> --skip-existing
+   --resume` to fill `Decks.cover_thumbnail` and `Materials.thumbnail` from
+   existing `pages/page-XX.*` files.
+4. Keep the generated JSONL manifest and use `--retry-failed` for interrupted or
+   flaky attachment batches.
+
 Use `--limit-slides <N>` for smoke tests when the source deck is large. This
 limits the generated plan and writes to the first N source slides without manually
 copying or editing a temporary `deck.json`.
+
+`upload_artifacts.py` and `upload_thumbnails.py` never create Decks or Materials
+rows. They locate existing records by `deck_id` or `slide_id`, then upload or
+replace attachment cells. Use `--skip-existing` when you only want to fill missing
+attachments and avoid touching existing Base attachment tokens.
 
 ## Search Flow
 
@@ -215,8 +233,9 @@ Steps:
 MVP behavior: `--dry-run` validates manifest shape and prints planned render
 steps; `--write` supports local `source_deck_json` or `file://...` references,
 writes a composed `deck.json`, and renders unless `--no-render` is passed.
-Cloud-backed `source_artifact_ref` is the canonical team reuse anchor, but
-automatic attachment download/cache for compose is still a follow-up.
+Cloud-backed `source_artifact_ref` is the canonical team reuse anchor.
+`compose_materials.py` resolves it to the related Decks row, downloads
+`assets_zip`, and restores `assets/` plus `pages/` before rendering.
 
 `compose_materials.py` supports two selection modes:
 

@@ -129,6 +129,28 @@ def chinese_deck_fields(*, title: str, records: list[dict[str, object]]) -> dict
     }
 
 
+def infer_industry_from_deck_name(title: str) -> str:
+    rules = [
+        ("医院", "医疗"),
+        ("医疗", "医疗"),
+        ("教育", "教育"),
+        ("职校", "教育"),
+        ("芯片", "芯片"),
+        ("制造", "制造"),
+        ("游戏", "游戏"),
+        ("餐饮", "餐饮"),
+        ("鞋服", "鞋服"),
+        ("消费", "消费"),
+        ("电商", "电商"),
+        ("汽车产业链", "汽车"),
+        ("汽车", "汽车"),
+    ]
+    for marker, industry in rules:
+        if marker in title:
+            return industry
+    return "未分类"
+
+
 def is_full_bleed_image_replica(slide: dict[str, object]) -> bool:
     data = slide.get("data") if isinstance(slide.get("data"), dict) else {}
     html_value = data.get("html") if isinstance(data, dict) else ""
@@ -206,7 +228,14 @@ def prepare_artifacts_for_upload(output_dir: Path, artifacts: dict[str, str | No
     return prepared
 
 
-def slide_records(deck_id: str, deck: dict[str, object], output_dir: Path) -> list[dict[str, object]]:
+def slide_records(
+    deck_id: str,
+    deck: dict[str, object],
+    output_dir: Path,
+    *,
+    deck_chinese_name: str | None = None,
+    industry: str | None = None,
+) -> list[dict[str, object]]:
     records: list[dict[str, object]] = []
     for index, slide in enumerate(deck["slides"], start=1):
         if not isinstance(slide, dict):
@@ -231,6 +260,8 @@ def slide_records(deck_id: str, deck: dict[str, object], output_dir: Path) -> li
                 "material_code": code,
                 "slide_id": f"{deck_id}:{key}",
                 "deck_id": deck_id,
+                "Deck中文名": deck_chinese_name or "",
+                "行业": industry or "",
                 "slide_key": key,
                 "slide_index": index,
                 "layout": slide.get("layout", "raw"),
@@ -266,9 +297,10 @@ def build_archive_plan(output_dir: Path, deck_id: str | None, *, limit_slides: i
             raise ValueError("limit_slides must be greater than 0")
         deck = dict(deck)
         deck["slides"] = deck["slides"][:limit_slides]
-    records = slide_records(resolved_deck_id, deck, output_dir)
-    cover_thumbnail = records[0].get("thumbnail") if records else None
     title = deck_title(deck, output_dir)
+    industry = infer_industry_from_deck_name(title)
+    records = slide_records(resolved_deck_id, deck, output_dir, deck_chinese_name=title, industry=industry)
+    cover_thumbnail = records[0].get("thumbnail") if records else None
 
     return {
         "mode": "plan",
@@ -277,6 +309,7 @@ def build_archive_plan(output_dir: Path, deck_id: str | None, *, limit_slides: i
             "deck_id": resolved_deck_id,
             "title": title,
             **chinese_deck_fields(title=title, records=records),
+            "行业": industry,
             "slide_count": len(records),
             "content_hash": file_sha256(deck_json),
             "deck_json": str(deck_json),
@@ -405,12 +438,73 @@ def record_without_attachment_fields(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def skipped_attachment_results(reason: str) -> dict[str, Any]:
+    return {"skipped": True, "reason": reason}
+
+
+def write_archive_plan(
+    config: lark_base.BaseConfig,
+    *,
+    output_dir: Path,
+    plan: dict[str, Any],
+    metadata_only: bool = False,
+) -> dict[str, Any]:
+    deck_record = record_without_attachment_fields(plan["deck_record"])
+    slide_records = [
+        record_without_attachment_fields(record)
+        for record in plan["slide_records"]
+    ]
+    deck_result = lark_base.upsert_deck(config, deck_record)
+    if metadata_only:
+        artifact_results: dict[str, Any] = skipped_attachment_results("metadata-only")
+    else:
+        artifact_results = upload_deck_artifacts(
+            config,
+            deck_result=deck_result,
+            artifact_files=prepare_artifacts_for_upload(output_dir, plan["artifact_files"]),
+        )
+    slide_results = [
+        lark_base.upsert_slide(config, record)
+        for record in slide_records
+    ]
+    if metadata_only:
+        attachment_results: dict[str, Any] = skipped_attachment_results("metadata-only")
+    else:
+        attachment_results = upload_preview_attachments(
+            config,
+            deck_result=deck_result,
+            slide_results=slide_results,
+            deck_record=plan["deck_record"],
+            slide_records=plan["slide_records"],
+        )
+
+    return {
+        "mode": "write",
+        "operation": "archive",
+        "deck_result": deck_result,
+        "slide_results": slide_results,
+        "artifact_results": artifact_results,
+        "attachment_results": attachment_results,
+        "written": {
+            "decks": 1,
+            "slides": len(slide_results),
+            "deck_artifacts": 0
+            if metadata_only
+            else sum(1 for item in artifact_results.values() if item.get("uploaded")),
+            "slide_thumbnails": 0
+            if metadata_only
+            else sum(1 for item in attachment_results["slides"] if item.get("uploaded")),
+        },
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Plan archiving a deck output into the deck library.")
     parser.add_argument("output_dir", type=Path, help="Directory containing deck.json and index.html.")
     parser.add_argument("--deck-id", help="Stable deck ID to use for the archive record.")
     parser.add_argument("--dry-run", action="store_true", help="Print the plan without writing Base/Drive.")
     parser.add_argument("--write", action="store_true", help="Write deck and slide records to Feishu Base.")
+    parser.add_argument("--metadata-only", action="store_true", help="Write Decks/Materials metadata only; skip deck artifacts and thumbnails.")
     parser.add_argument("--limit-slides", type=int, help="Archive only the first N slides for smoke tests.")
     parser.add_argument("--base-token", help="Feishu Base token. Defaults to DECK_LIBRARY_BASE_TOKEN.")
     parser.add_argument("--decks-table", help="Decks table ID/name. Defaults to DECK_LIBRARY_DECKS_TABLE.")
@@ -431,6 +525,8 @@ def main() -> int:
 
     if not args.write:
         plan["mode"] = "dry-run"
+        if args.metadata_only:
+            plan["attachment_mode"] = "metadata-only"
         print(json.dumps(plan, ensure_ascii=False, indent=2))
         return 0
 
@@ -447,52 +543,17 @@ def main() -> int:
         return 2
 
     try:
-        deck_record = record_without_attachment_fields(plan["deck_record"])
-        slide_records = [
-            record_without_attachment_fields(record)
-            for record in plan["slide_records"]
-        ]
-        deck_result = lark_base.upsert_deck(config, deck_record)
-        artifact_results = upload_deck_artifacts(
+        result = write_archive_plan(
             config,
-            deck_result=deck_result,
-            artifact_files=prepare_artifacts_for_upload(args.output_dir.resolve(), plan["artifact_files"]),
-        )
-        slide_results = [
-            lark_base.upsert_slide(config, record)
-            for record in slide_records
-        ]
-        attachment_results = upload_preview_attachments(
-            config,
-            deck_result=deck_result,
-            slide_results=slide_results,
-            deck_record=plan["deck_record"],
-            slide_records=plan["slide_records"],
+            output_dir=args.output_dir.resolve(),
+            plan=plan,
+            metadata_only=args.metadata_only,
         )
     except Exception as exc:
         print(f"archive.py: Feishu Base write failed: {exc}", file=sys.stderr)
         return 1
 
-    print(
-        json.dumps(
-            {
-                "mode": "write",
-                "operation": "archive",
-                "deck_result": deck_result,
-                "slide_results": slide_results,
-                "artifact_results": artifact_results,
-                "attachment_results": attachment_results,
-                "written": {
-                    "decks": 1,
-                    "slides": len(slide_results),
-                    "deck_artifacts": sum(1 for item in artifact_results.values() if item.get("uploaded")),
-                    "slide_thumbnails": sum(1 for item in attachment_results["slides"] if item.get("uploaded")),
-                },
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
-    )
+    print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
 

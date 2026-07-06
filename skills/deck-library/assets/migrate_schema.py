@@ -15,6 +15,7 @@ DECK_VISIBLE_FIELDS = [
     "deck_id",
     "cover_thumbnail",
     "中文名称",
+    "行业",
     "中文描述",
     "适用场景",
     "推荐用法",
@@ -50,22 +51,24 @@ DECK_VISIBLE_FIELDS = [
 ]
 
 MATERIAL_VISIBLE_FIELDS = [
-    "material_id",
     "thumbnail",
+    "Deck中文名",
     "素材名称",
-    "素材描述",
+    "page_role",
+    "reuse_status",
+    "行业",
     "material_code",
+    "slide_index",
     "deck_id",
     "关联Deck",
+    "素材描述",
     "适用场景",
     "页面价值",
     "视觉类型",
     "关键词",
-    "page_role",
-    "reuse_status",
     "edit_notes",
     "is_representative_page",
-    "slide_index",
+    "material_id",
     "material_type",
     "quality_tier",
     "fidelity_notes",
@@ -102,6 +105,7 @@ def deck_fields() -> list[dict[str, Any]]:
     return [
         text_field("deck_id", "Stable deck key used by automation."),
         text_field("中文名称", "Human-facing Chinese deck title for Base browsing."),
+        text_field("行业", "Inferred or human-maintained industry label for deck/material picking."),
         text_field("中文描述", "完整 deck 的中文说明，供人工浏览和 Agent 检索。"),
         text_field("推荐用法", "说明适合谁、什么时候用、怎么复用。"),
         text_field("适用场景", "逗号或顿号分隔的中文场景标签，保持与 CLI 字符串写入兼容。"),
@@ -146,6 +150,8 @@ def material_fields(decks_table: str) -> list[dict[str, Any]]:
         text_field("素材描述", "Chinese material description."),
         text_field("slide_id", "Stable slide ID: <deck_id>:<slide_key>."),
         text_field("deck_id", "Stable deck key used by automation."),
+        text_field("Deck中文名", "Denormalized Chinese deck title for browsing Materials without opening the linked Deck."),
+        text_field("行业", "Inferred or human-maintained industry label copied from the source Deck."),
         {"name": "关联Deck", "type": "link", "link_table": decks_table, "description": "可选人工关联字段；deck_id 文本键仍是自动化主键。"},
         text_field("适用场景", "逗号或顿号分隔的中文场景标签。"),
         text_field("页面价值", "Chinese explanation of what this page helps communicate or decide."),
@@ -203,6 +209,27 @@ def build_migration_plan(base_token: str, decks_table: str, materials_table: str
             ],
             "materials": [
                 {"name": "Materials Gallery", "type": "gallery", "filter": {"logic": "and", "conditions": [["status", "==", "active"]]}},
+                {
+                    "name": "挑页｜按Deck",
+                    "type": "grid",
+                    "filter": {"logic": "and", "conditions": [["status", "==", "active"]]},
+                    "group": {"group_config": [{"field": "Deck中文名", "desc": False}, {"field": "page_role", "desc": False}, {"field": "reuse_status", "desc": False}]},
+                    "sort": [{"field": "Deck中文名", "desc": False}, {"field": "slide_index", "desc": False}],
+                },
+                {
+                    "name": "挑页｜按行业",
+                    "type": "grid",
+                    "filter": {"logic": "and", "conditions": [["status", "==", "active"]]},
+                    "group": {"group_config": [{"field": "行业", "desc": False}, {"field": "page_role", "desc": False}, {"field": "reuse_status", "desc": False}]},
+                    "sort": [{"field": "行业", "desc": False}, {"field": "slide_index", "desc": False}],
+                },
+                {
+                    "name": "挑页｜可复用",
+                    "type": "grid",
+                    "filter": {"logic": "and", "conditions": [["status", "==", "active"]]},
+                    "group": {"group_config": [{"field": "reuse_status", "desc": False}, {"field": "行业", "desc": False}, {"field": "page_role", "desc": False}]},
+                    "sort": [{"field": "reuse_status", "desc": False}, {"field": "slide_index", "desc": False}],
+                },
                 {"name": "按Deck下钻", "type": "grid", "filter": {"logic": "and", "conditions": [["status", "==", "active"]]}},
                 {"name": "可直接复用页面", "type": "grid", "filter": {"logic": "and", "conditions": [["reuse_status", "==", "可直接复用"]]}},
                 {"name": "代表页", "type": "gallery", "filter": {"logic": "and", "conditions": [["is_representative_page", "==", True]]}},
@@ -226,6 +253,22 @@ def collect_names(result: dict[str, Any], *, kind: str) -> set[str]:
     return names
 
 
+def collect_field_ids(result: dict[str, Any]) -> dict[str, str]:
+    data = result.get("data") if isinstance(result.get("data"), dict) else result
+    candidates = data.get("items") or data.get("fields") or []
+    field_ids: dict[str, str] = {}
+    if not isinstance(candidates, list):
+        return field_ids
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name") or item.get("field_name")
+        field_id = item.get("id") or item.get("field_id")
+        if name and field_id:
+            field_ids[str(name)] = str(field_id)
+    return field_ids
+
+
 def call_or_noop(function):
     try:
         return function()
@@ -236,12 +279,42 @@ def call_or_noop(function):
         raise
 
 
+def set_view_visible_fields_ordered(
+    config: lark_base.BaseConfig,
+    *,
+    table_id: str,
+    view_id: str,
+    visible_fields: list[str],
+) -> dict[str, Any]:
+    if len(visible_fields) > 3:
+        # Some Base views report "no operation produced" when expanding from an
+        # all-fields default. Shrinking first makes the subsequent ordered write stick.
+        call_or_noop(
+            lambda: lark_base.set_view_visible_fields(
+                config,
+                table_id=table_id,
+                view_id=view_id,
+                visible_fields=visible_fields[:3],
+            )
+        )
+    return call_or_noop(
+        lambda: lark_base.set_view_visible_fields(
+            config,
+            table_id=table_id,
+            view_id=view_id,
+            visible_fields=visible_fields,
+        )
+    )
+
+
 def apply_plan(config: lark_base.BaseConfig, plan: dict[str, Any]) -> dict[str, Any]:
     results: dict[str, Any] = {"fields": {"decks": [], "materials": []}, "views": {"decks": [], "materials": []}}
     table_ids = {"decks": config.decks_table, "materials": config.slides_table}
 
     for table_key, table_id in table_ids.items():
-        existing_fields = collect_names(lark_base.list_fields(config, table_id=table_id), kind="field")
+        field_result = lark_base.list_fields(config, table_id=table_id)
+        existing_fields = collect_names(field_result, kind="field")
+        field_ids = collect_field_ids(field_result)
         for field in plan["fields"][table_key]:
             if field["name"] in existing_fields:
                 results["fields"][table_key].append({"name": field["name"], "action": "skip_existing"})
@@ -254,6 +327,8 @@ def apply_plan(config: lark_base.BaseConfig, plan: dict[str, Any]) -> dict[str, 
                 }
             )
 
+            field_result = lark_base.list_fields(config, table_id=table_id)
+            field_ids = collect_field_ids(field_result)
         existing_views = collect_names(lark_base.list_views(config, table_id=table_id), kind="view")
         for view in plan["views"][table_key]:
             view_name = view["name"]
@@ -261,12 +336,16 @@ def apply_plan(config: lark_base.BaseConfig, plan: dict[str, Any]) -> dict[str, 
             if view_name not in existing_views:
                 call_or_noop(lambda view=view, table_id=table_id: lark_base.create_view(config, table_id=table_id, view={"name": view_name, "type": view.get("type", "grid")}))
                 action = "created"
+            visible_fields = [
+                field_ids.get(field_name, field_name)
+                for field_name in plan["visible_fields"][table_key]
+            ]
             visible_result = call_or_noop(
-                lambda table_id=table_id, view_name=view_name, table_key=table_key: lark_base.set_view_visible_fields(
+                lambda table_id=table_id, view_name=view_name, visible_fields=visible_fields: set_view_visible_fields_ordered(
                     config,
                     table_id=table_id,
                     view_id=view_name,
-                    visible_fields=plan["visible_fields"][table_key],
+                    visible_fields=visible_fields,
                 )
             )
             filter_json = view.get("filter") or {"conditions": []}
@@ -278,12 +357,34 @@ def apply_plan(config: lark_base.BaseConfig, plan: dict[str, Any]) -> dict[str, 
                     filter_json=filter_json,
                 )
             )
+            group_result = None
+            if "group" in view:
+                group_result = call_or_noop(
+                    lambda table_id=table_id, view_name=view_name, view=view: lark_base.set_view_group(
+                        config,
+                        table_id=table_id,
+                        view_id=view_name,
+                        group_json=view["group"],
+                    )
+                )
+            sort_result = None
+            if "sort" in view:
+                sort_result = call_or_noop(
+                    lambda table_id=table_id, view_name=view_name, view=view: lark_base.set_view_sort(
+                        config,
+                        table_id=table_id,
+                        view_id=view_name,
+                        sort_json=view["sort"],
+                    )
+                )
             results["views"][table_key].append(
                 {
                     "name": view_name,
                     "action": action,
                     "visible_fields": visible_result,
                     "filter": filter_result,
+                    "group": group_result,
+                    "sort": sort_result,
                 }
             )
     return results

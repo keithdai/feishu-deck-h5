@@ -33,10 +33,17 @@ class SchemaMigrationPlanTests(unittest.TestCase):
         self.assertEqual(plan["operation"], "migrate_schema")
         self.assertNotIn("base_token", plan)
         self.assertEqual(plan["base_token_configured"], True)
-        self.assertIn("Materials Gallery", [view["name"] for view in plan["views"]["materials"]])
+        material_views = {view["name"]: view for view in plan["views"]["materials"]}
+        self.assertIn("Materials Gallery", material_views)
+        self.assertIn("挑页｜按Deck", material_views)
+        self.assertIn("挑页｜按行业", material_views)
+        self.assertIn("挑页｜可复用", material_views)
         self.assertIn("可直接使用", [view["name"] for view in plan["views"]["decks"]])
         self.assertIn("测试样本", [view["name"] for view in plan["views"]["decks"]])
-        self.assertEqual(plan["visible_fields"]["materials"][0:4], ["material_id", "thumbnail", "素材名称", "素材描述"])
+        self.assertEqual(
+            plan["visible_fields"]["materials"][0:8],
+            ["thumbnail", "Deck中文名", "素材名称", "page_role", "reuse_status", "行业", "material_code", "slide_index"],
+        )
         self.assertTrue(any(field["name"] == "关联Deck" and field["type"] == "link" for field in plan["fields"]["materials"]))
         self.assertFalse(any(field["type"] == "lookup" for field in plan["fields"]["materials"]))
         self.assertIn("关联Deck", plan["visible_fields"]["materials"])
@@ -51,6 +58,17 @@ class SchemaMigrationPlanTests(unittest.TestCase):
         self.assertEqual(material_fields["reuse_status"]["type"], "text")
         self.assertEqual(material_fields["page_role"]["type"], "text")
         self.assertEqual(material_fields["is_representative_page"]["type"], "checkbox")
+        self.assertEqual(deck_fields["行业"]["type"], "text")
+        self.assertEqual(material_fields["行业"]["type"], "text")
+        self.assertEqual(
+            material_views["挑页｜按Deck"]["group"],
+            {"group_config": [{"field": "Deck中文名", "desc": False}, {"field": "page_role", "desc": False}, {"field": "reuse_status", "desc": False}]},
+        )
+        self.assertEqual(
+            material_views["挑页｜按行业"]["group"],
+            {"group_config": [{"field": "行业", "desc": False}, {"field": "page_role", "desc": False}, {"field": "reuse_status", "desc": False}]},
+        )
+        self.assertEqual(material_views["挑页｜按Deck"]["sort"], [{"field": "Deck中文名", "desc": False}, {"field": "slide_index", "desc": False}])
 
     def test_noop_errors_are_reported_as_idempotent_success(self):
         migrate_schema = load_module("migrate_schema")

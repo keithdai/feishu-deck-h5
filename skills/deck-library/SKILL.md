@@ -171,7 +171,7 @@ motion; propose a native H5 upgrade first.
 
 Decks views should put complete deck browsing fields before technical artifacts:
 
-- Front: `cover_thumbnail`, `中文名称`, `中文描述`, `online_url`, `适用场景`, `推荐用法`, `复用范围`, `链接状态`.
+- Front: `cover_thumbnail`, `中文名称`, `行业`, `中文描述`, `online_url`, `适用场景`, `推荐用法`, `复用范围`, `链接状态`.
 - Quality and access: `quality_tier`, `access_status`, `link_health`, `last_checked_at`, `owner`, `status`.
 - Agent aliases: `title`, `deck_type`, `scene`, `tags`, `recommended_use`, `reuse_scope`.
 - Technical fields last: `deck_id`, `source`, `slide_count`, `content_hash`, `deck_json`, `inline_html`, `assets_zip`.
@@ -179,9 +179,10 @@ Decks views should put complete deck browsing fields before technical artifacts:
 User-facing fields first. Materials views should put human browsing fields before
 technical fields so the Base is easy to scan:
 
-- Front: `thumbnail`, `material_code`, `素材名称`, `素材描述`, `关联Deck`, `适用场景`, `页面价值`, `视觉类型`, `关键词`.
+- Front: `thumbnail`, `Deck中文名`, `素材名称`, `page_role`, `reuse_status`, `行业`, `material_code`, `slide_index`, `deck_id`, `关联Deck`.
+- Browse support: `素材描述`, `适用场景`, `页面价值`, `视觉类型`, `关键词`.
 - Search support: `page_description`, `title`, `scene`, `tags`, `visual_summary`, `content_summary`.
-- Middle: `status`, `material_type`, `quality_tier`, `has_motion`, `motion_tier`, `material_id`, `slide_index`, `screen_label`, `layout`, `slide_key`.
+- Middle: `status`, `material_type`, `quality_tier`, `has_motion`, `motion_tier`, `material_id`, `screen_label`, `layout`, `slide_key`.
 - Technical fields last: `deck_id`, `source_artifact_ref`, `source`, `theme`, `accent`, `content_hash`, `slide_payload_json`.
 
 Gallery views should use `thumbnail` as the card cover and show `material_code`
@@ -191,6 +192,9 @@ by Base; if so, keep the user-facing fields immediately after it.
 Materials operational views should include:
 
 - `Materials Gallery`: thumbnail-first picking view.
+- `挑页｜按Deck`: grouped by `Deck中文名 -> page_role -> reuse_status`.
+- `挑页｜按行业`: grouped by `行业 -> page_role -> reuse_status`.
+- `挑页｜可复用`: grouped by `reuse_status -> 行业 -> page_role`.
 - `按Deck下钻`: source-order page inspection by `deck_id`.
 - `可直接复用页面`: pages with `reuse_status=可直接复用`.
 - `代表页`: pages marked `is_representative_page=true`.
@@ -208,6 +212,42 @@ python3 skills/deck-library/assets/archive.py <run-output-dir> --write \
   --decks-table <tbl_decks> \
   --materials-table <tbl_materials>
 ```
+
+For large PPT/H5 batches, decouple searchable metadata from slow attachment
+uploads. First write Decks/Materials records:
+
+```bash
+python3 skills/deck-library/assets/archive.py <run-output-dir> --metadata-only --write \
+  --base-token <base_token> \
+  --decks-table <tbl_decks> \
+  --materials-table <tbl_materials>
+```
+
+Then fill reusable deck artifacts and thumbnails with resumable manifests:
+
+```bash
+python3 skills/deck-library/assets/upload_artifacts.py <run-output-dir> \
+  --deck-id deck_20260704_001 \
+  --skip-existing \
+  --resume \
+  --base-token <base_token> \
+  --decks-table <tbl_decks> \
+  --materials-table <tbl_materials>
+```
+
+```bash
+python3 skills/deck-library/assets/upload_thumbnails.py <run-output-dir> \
+  --deck-id deck_20260704_001 \
+  --skip-existing \
+  --resume \
+  --base-token <base_token> \
+  --decks-table <tbl_decks> \
+  --materials-table <tbl_materials>
+```
+
+Use `--retry-failed` on the same manifest to retry only failed attachment uploads.
+`upload_artifacts.py` and `upload_thumbnails.py` only update existing Base
+records; they do not create Decks or Materials rows.
 
 Set up or repair Base fields/views:
 

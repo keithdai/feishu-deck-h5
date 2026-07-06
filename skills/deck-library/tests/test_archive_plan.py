@@ -54,7 +54,31 @@ class ArchivePlanTests(unittest.TestCase):
         self.assertIn("汇报材料", plan["deck_record"]["适用场景"])
         self.assertIn("下钻到 Materials", plan["deck_record"]["推荐用法"])
         self.assertEqual(plan["slide_records"][0]["status"], "active")
+        self.assertEqual(plan["slide_records"][0]["Deck中文名"], "Demo Deck")
         self.assertEqual(plan["slide_records"][0]["content_summary"], "Intro")
+
+    def test_archive_plan_infers_industry_from_chinese_deck_title(self):
+        archive = load_module("archive")
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            (output / "deck.json").write_text(
+                json.dumps(
+                    {
+                        "deck": {"title": "养和医院_飞书介绍0527_医院"},
+                        "slides": [
+                            {"key": "intro", "layout": "raw", "data": {"title": "Intro"}}
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (output / "index.html").write_text("<html></html>", encoding="utf-8")
+
+            plan = archive.build_archive_plan(output, "deck_industry_yanghe")
+
+        self.assertEqual(plan["deck_record"]["行业"], "医疗")
+        self.assertEqual(plan["slide_records"][0]["行业"], "医疗")
 
     def test_archive_plan_uses_existing_page_snapshots_as_thumbnails(self):
         archive = load_module("archive")
@@ -376,6 +400,77 @@ class ArchivePlanTests(unittest.TestCase):
             archive.attachment_upload_path(str(path)),
             "runs/demo/output/pages/page-01.jpg",
         )
+
+    def test_metadata_only_archive_write_skips_all_attachment_uploads(self):
+        archive = load_module("archive")
+        calls = {"deck": 0, "slide": 0, "prepare": 0, "artifacts": 0, "previews": 0}
+
+        def fake_upsert_deck(config, record):
+            calls["deck"] += 1
+            self.assertNotIn("deck_json", record)
+            self.assertNotIn("cover_thumbnail", record)
+            return {"record_id": "recDeck"}
+
+        def fake_upsert_slide(config, record):
+            calls["slide"] += 1
+            self.assertNotIn("thumbnail", record)
+            return {"record_id": f"recSlide{calls['slide']}"}
+
+        def fail_prepare(*args, **kwargs):
+            calls["prepare"] += 1
+            raise AssertionError("metadata-only should not prepare assets.zip")
+
+        def fail_artifacts(*args, **kwargs):
+            calls["artifacts"] += 1
+            raise AssertionError("metadata-only should not upload deck artifacts")
+
+        def fail_previews(*args, **kwargs):
+            calls["previews"] += 1
+            raise AssertionError("metadata-only should not upload thumbnails")
+
+        archive.lark_base.upsert_deck = fake_upsert_deck
+        archive.lark_base.upsert_slide = fake_upsert_slide
+        archive.prepare_artifacts_for_upload = fail_prepare
+        archive.upload_deck_artifacts = fail_artifacts
+        archive.upload_preview_attachments = fail_previews
+        config = archive.lark_base.BaseConfig(
+            base_token="base",
+            decks_table="tblDecks",
+            slides_table="tblSlides",
+        )
+        plan = {
+            "deck_record": {
+                "deck_id": "deck_demo",
+                "deck_json": "runs/demo/output/deck.json",
+                "cover_thumbnail": "runs/demo/output/pages/page-01.png",
+            },
+            "slide_records": [
+                {
+                    "slide_id": "deck_demo:intro",
+                    "thumbnail": "runs/demo/output/pages/page-01.png",
+                },
+                {
+                    "slide_id": "deck_demo:body",
+                    "thumbnail": "runs/demo/output/pages/page-02.png",
+                },
+            ],
+            "artifact_files": {"deck_json": "runs/demo/output/deck.json"},
+        }
+
+        result = archive.write_archive_plan(
+            config,
+            output_dir=Path.cwd() / "runs/demo/output",
+            plan=plan,
+            metadata_only=True,
+        )
+
+        self.assertEqual(calls, {"deck": 1, "slide": 2, "prepare": 0, "artifacts": 0, "previews": 0})
+        self.assertEqual(result["written"]["decks"], 1)
+        self.assertEqual(result["written"]["slides"], 2)
+        self.assertEqual(result["written"]["deck_artifacts"], 0)
+        self.assertEqual(result["written"]["slide_thumbnails"], 0)
+        self.assertEqual(result["artifact_results"]["skipped"], True)
+        self.assertEqual(result["attachment_results"]["skipped"], True)
 
 
 if __name__ == "__main__":

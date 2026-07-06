@@ -89,6 +89,58 @@ class LarkBaseTests(unittest.TestCase):
 
         self.assertEqual(errors, ["base_token is required", "slides_table is required"])
 
+    def test_run_json_passes_configured_command_timeout_to_subprocess(self):
+        lark_base = load_module("lark_base")
+        calls = []
+
+        class Completed:
+            returncode = 0
+            stdout = '{"ok": true}'
+            stderr = ""
+
+        def fake_run(command, *, check, capture_output, text, timeout):
+            calls.append(
+                {
+                    "command": command,
+                    "check": check,
+                    "capture_output": capture_output,
+                    "text": text,
+                    "timeout": timeout,
+                }
+            )
+            return Completed()
+
+        original_run = lark_base.subprocess.run
+        original_timeout = lark_base.COMMAND_TIMEOUT_SECONDS
+        try:
+            lark_base.subprocess.run = fake_run
+            lark_base.COMMAND_TIMEOUT_SECONDS = 17
+
+            self.assertEqual(lark_base.run_json(["lark-cli", "base"]), {"ok": True})
+            self.assertEqual(calls[0]["timeout"], 17)
+        finally:
+            lark_base.subprocess.run = original_run
+            lark_base.COMMAND_TIMEOUT_SECONDS = original_timeout
+
+    def test_run_json_accepts_json_after_lark_cli_prefix_noise(self):
+        lark_base = load_module("lark_base")
+
+        class Completed:
+            returncode = 0
+            stdout = 'lark-cli v1.0.65 installed successfully\n{"ok": true, "data": {"x": 1}}'
+            stderr = ""
+
+        original_run = lark_base.subprocess.run
+        original_timeout = lark_base.COMMAND_TIMEOUT_SECONDS
+        try:
+            lark_base.subprocess.run = lambda *args, **kwargs: Completed()
+            lark_base.COMMAND_TIMEOUT_SECONDS = None
+
+            self.assertEqual(lark_base.run_json(["lark-cli", "base"]), {"ok": True, "data": {"x": 1}})
+        finally:
+            lark_base.subprocess.run = original_run
+            lark_base.COMMAND_TIMEOUT_SECONDS = original_timeout
+
     def test_extract_single_record_id_returns_record_id_from_search_result(self):
         lark_base = load_module("lark_base")
         result = {
@@ -325,6 +377,18 @@ class LarkBaseTests(unittest.TestCase):
             view_id="vewReady",
             filter_json={"logic": "and", "conditions": [["access_status", "intersects", ["ready"]]]},
         )
+        group_command = lark_base.build_view_set_group_command(
+            config=config,
+            table_id="tblMaterials",
+            view_id="vewPick",
+            group_json={"group_config": [{"field": "Deck中文名", "desc": False}]},
+        )
+        sort_command = lark_base.build_view_set_sort_command(
+            config=config,
+            table_id="tblMaterials",
+            view_id="vewPick",
+            sort_json=[{"field": "Deck中文名", "desc": False}, {"field": "slide_index", "desc": False}],
+        )
 
         self.assertIn("+field-create", field_command)
         self.assertEqual(json.loads(field_command[field_command.index("--json") + 1])["name"], "复用状态")
@@ -338,6 +402,16 @@ class LarkBaseTests(unittest.TestCase):
         self.assertEqual(
             json.loads(filter_command[filter_command.index("--json") + 1])["conditions"],
             [["access_status", "intersects", ["ready"]]],
+        )
+        self.assertIn("+view-set-group", group_command)
+        self.assertEqual(
+            json.loads(group_command[group_command.index("--json") + 1]),
+            {"group_config": [{"field": "Deck中文名", "desc": False}]},
+        )
+        self.assertIn("+view-set-sort", sort_command)
+        self.assertEqual(
+            json.loads(sort_command[sort_command.index("--json") + 1]),
+            {"sort_config": [{"field": "Deck中文名", "desc": False}, {"field": "slide_index", "desc": False}]},
         )
 
     def test_extract_attachment_tokens_from_record_get_result(self):
